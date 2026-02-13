@@ -1,25 +1,31 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { UnitBase } from "./supplies.model.js";
 import { supabaseAdmin } from "../../lib/supabase.js";
+import { requireRole } from "../../plugins/roles.js";
 
 function isUnitBase(v: unknown): v is UnitBase {
   return v === "u" || v === "hoja" || v === "ml" || v === "m" || v === "m2";
 }
 
 export async function suppliesRoutes(app: FastifyInstance) {
-  // Listar insumos (desde Supabase)
-  app.get("/supplies", async (_req, reply) => {
+  // ✅ VER: cualquiera logueado
+  app.get("/supplies", async (req: FastifyRequest, reply) => {
+    await app.requireAuth(req);
+
     const { data, error } = await supabaseAdmin
       .from("supplies")
       .select("*")
       .order("created_at", { ascending: false });
 
     if (error) return reply.code(500).send({ error: error.message });
-    return reply.send(data);
+    return reply.send(data ?? []);
   });
 
-  // Crear insumo (en Supabase)
-  app.post("/supplies", async (req, reply) => {
+  // 🔒 CREAR: solo admin/supervisor
+  app.post("/supplies", async (req: FastifyRequest, reply) => {
+    await app.requireAuth(req);
+    requireRole(req, ["admin", "supervisor"]);
+
     const body = req.body as Partial<{
       name: string;
       unitBase: UnitBase;
