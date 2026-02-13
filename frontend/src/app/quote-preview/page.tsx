@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { RequireAuth } from "@/components/RequireAuth";
 
 type DesignLevel = "cliente" | "simple" | "medio" | "pro";
 
@@ -187,6 +188,7 @@ export default function QuotePreviewPage() {
   };
 
   return (
+    <RequireAuth>
     <main className="min-h-screen p-8 space-y-6">
       <h1 className="text-2xl font-semibold">Cotización (preview + guardar + convertir)</h1>
 
@@ -309,6 +311,7 @@ export default function QuotePreviewPage() {
           </div>
         </div>
       )}
+      </requireAuth>
     </main>
   );
 }
