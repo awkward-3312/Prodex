@@ -3,28 +3,66 @@
 import { useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabaseClient";
+import { apiFetch } from "@/lib/apiFetch";
 
-export function RequireAuth({ children }: { children: React.ReactNode }) {
+type Role = "admin" | "supervisor" | "vendedor";
+
+export function RequireAuth({
+  children,
+  allowRoles,
+}: {
+  children: React.ReactNode;
+  allowRoles?: Role[];
+}) {
   const router = useRouter();
   const pathname = usePathname();
   const [ready, setReady] = useState(false);
 
+  // ✅ dependencia estable (string)
+  const rolesKey = (allowRoles ?? []).join("|");
+
   useEffect(() => {
-    let mounted = true;
+    let alive = true;
 
-    (async () => {
-      const { data, error } = await supabase.auth.getSession();
+    void (async () => {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
 
-      if (!mounted) return;
+      if (!alive) return;
 
-      const hasSession = !!data?.session;
-
-      // debug útil
-      console.log("RequireAuth session?", hasSession, error?.message ?? null);
-
-      if (!hasSession) {
-        // evita bucle si ya estás en /login
+      if (!token) {
         if (pathname !== "/login") router.replace("/login");
+        setReady(false);
+        return;
+      }
+
+      // ✅ reconstruimos allowRoles desde rolesKey (así no usamos allowRoles aquí)
+      const allowed: Role[] = rolesKey
+        ? (rolesKey.split("|").filter(Boolean) as Role[])
+        : [];
+
+      // si no hay restricción por rol
+      if (allowed.length === 0) {
+        setReady(true);
+        return;
+      }
+
+      const API = process.env.NEXT_PUBLIC_API_URL;
+      const res = await apiFetch(`${API}/me`);
+      const me = await res.json().catch(() => null);
+
+      if (!alive) return;
+
+      if (!res.ok || !me?.role) {
+        router.replace("/login");
+        setReady(false);
+        return;
+      }
+
+      const role = String(me.role) as Role;
+
+      if (!allowed.includes(role)) {
+        router.replace("/unauthorized"); // o /login si no tienes esa ruta
         setReady(false);
         return;
       }
@@ -33,9 +71,9 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
     })();
 
     return () => {
-      mounted = false;
+      alive = false;
     };
-  }, [router, pathname]);
+  }, [router, pathname, rolesKey]);
 
   if (!ready) return <div className="p-8">Cargando...</div>;
   return <>{children}</>;

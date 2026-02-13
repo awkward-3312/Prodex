@@ -9,8 +9,8 @@ import { suppliesPurchasesRoutes } from "./modules/supplies/supplies.purchases.r
 import { quotesPreviewRoutes } from "./modules/quotes/quotes.preview.routes.js";
 import { quotesRoutes } from "./modules/quotes/quotes.routes.js";
 import { ordersConvertRoutes } from "./modules/orders/orders.convert.routes.js";
-import { authPlugin } from "./plugins/auth.js";
-import { ok } from "assert";
+import authPlugin from "./plugins/auth.js";
+import authMeRoutes from "./modules/auth/auth.me.routes.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -46,6 +46,7 @@ await app.register(suppliesPurchasesRoutes);
 await app.register(quotesPreviewRoutes);
 await app.register(quotesRoutes);
 await app.register(ordersConvertRoutes);
+await app.register(authMeRoutes);
 
 app.listen({ port: 4000, host: "0.0.0.0" }).catch((err) => {
   app.log.error(err);

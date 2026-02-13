@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { RequireAuth } from "@/components/RequireAuth";
 import { supabase } from "@/lib/supabaseClient";
 import { useRouter } from "next/navigation";
@@ -58,7 +58,8 @@ type ConvertErr = { error: string; missing?: MissingItem[] };
 type ConvertResponse = ConvertOk | ConvertErr;
 
 export default function QuotePreviewPage() {
-  const API = process.env.NEXT_PUBLIC_API_URL;
+  const API = process.env.NEXT_PUBLIC_API_URL!;
+  const router = useRouter();
 
   const [productId, setProductId] = useState<string>("");
   const [cantidad, setCantidad] = useState<number>(1);
@@ -68,7 +69,50 @@ export default function QuotePreviewPage() {
   const [result, setResult] = useState<PreviewResponse | null>(null);
   const [saved, setSaved] = useState<CreateQuoteResponse | null>(null);
 
-  const router = useRouter();
+  // (Opcional) estado para ver /me
+  const [meInfo, setMeInfo] = useState<{ userId: string; role: string } | null>(null);
+
+  // ✅ aquí va el /me (NO await suelto)
+  useEffect(() => {
+    let alive = true;
+
+    void (async () => {
+      try {
+        const res = await apiFetch(`${API}/me`);
+        const data = (await res.json().catch(() => null)) as unknown;
+
+        if (!alive) return;
+
+        if (!res.ok) {
+          console.warn("GET /me error:", res.status, data);
+          setMeInfo(null);
+          return;
+        }
+
+        // esperado: { userId, role }
+        if (typeof data === "object" && data !== null && "userId" in data && "role" in data) {
+          const d = data as { userId: string; role: string };
+          setMeInfo({ userId: String(d.userId), role: String(d.role) });
+        } else {
+          setMeInfo(null);
+        }
+      } catch (e) {
+        console.warn("GET /me network error:", e);
+        setMeInfo(null);
+      }
+    })();
+
+    return () => {
+      alive = false;
+    };
+  }, [API]);
+
+  const testMe = async () => {
+    const res = await apiFetch(`${API}/me`);
+    const data = await res.json().catch(() => null);
+    console.log("ME:", res.status, data);
+    alert(`ME ${res.status}: ${JSON.stringify(data)}`);
+  };
 
   const logout = async () => {
     await supabase.auth.signOut();
@@ -200,18 +244,32 @@ export default function QuotePreviewPage() {
   return (
     <RequireAuth>
       <main className="min-h-screen p-8 space-y-6">
-        <div className="flex justify-end">
-          <button
-            className="text-red-600 border border-red-600 px-3 py-1 rounded"
-            onClick={logout}
-          >
-            Cerrar sesión
-          </button>
+        <div className="flex justify-between items-center">
+          <div className="text-xs opacity-70">
+            {meInfo ? (
+              <>
+                user: <span className="font-medium">{meInfo.userId}</span> — role:{" "}
+                <span className="font-medium">{meInfo.role}</span>
+              </>
+            ) : (
+              <>user: (sin /me)</>
+            )}
+          </div>
+
+          <div className="flex gap-2">
+            <button className="border px-3 py-1 rounded" onClick={testMe}>
+              Probar /me
+            </button>
+            <button
+              className="text-red-600 border border-red-600 px-3 py-1 rounded"
+              onClick={logout}
+            >
+              Cerrar sesión
+            </button>
+          </div>
         </div>
 
-        <h1 className="text-2xl font-semibold">
-          Cotización (preview + guardar + convertir)
-        </h1>
+        <h1 className="text-2xl font-semibold">Cotización (preview + guardar + convertir)</h1>
 
         <div className="border rounded-lg p-4 max-w-xl space-y-3">
           <div className="space-y-1">
@@ -287,9 +345,7 @@ export default function QuotePreviewPage() {
             <h2 className="font-semibold">Cotización guardada</h2>
             <div className="text-sm">ID: {saved.quoteId}</div>
             <div className="text-sm">Estado: {saved.quote.status}</div>
-            <div className="text-sm">
-              Subtotal: L {Number(saved.quote.price_final).toFixed(2)}
-            </div>
+            <div className="text-sm">Subtotal: L {Number(saved.quote.price_final).toFixed(2)}</div>
             <div className="text-sm">ISV: L {Number(saved.quote.isv_amount).toFixed(2)}</div>
             <div className="font-medium">Total: L {Number(saved.quote.total).toFixed(2)}</div>
             <div className="text-xs opacity-70">Expira: {saved.quote.expires_at}</div>
@@ -305,8 +361,8 @@ export default function QuotePreviewPage() {
                   <div key={idx} className="text-sm border rounded p-2">
                     <div className="font-medium">{b.supplyName}</div>
                     <div className="opacity-80">
-                      qty: {b.qty} {b.unitBase} — cpu: L {b.costPerUnit.toFixed(4)} — costo:
-                      L {b.lineCost.toFixed(4)}
+                      qty: {b.qty} {b.unitBase} — cpu: L {b.costPerUnit.toFixed(4)} — costo: L{" "}
+                      {b.lineCost.toFixed(4)}
                     </div>
                     <div className="opacity-60">fórmula: {b.formula}</div>
                   </div>
@@ -322,9 +378,7 @@ export default function QuotePreviewPage() {
                 <div>Operativo: L {result.totals.operationalCost.toFixed(4)}</div>
                 <div>Diseño: L {result.totals.designCost.toFixed(2)}</div>
                 <hr className="my-2" />
-                <div className="font-medium">
-                  Costo total: L {result.totals.costTotal.toFixed(4)}
-                </div>
+                <div className="font-medium">Costo total: L {result.totals.costTotal.toFixed(4)}</div>
                 <div>Precio mínimo: L {result.totals.minPrice.toFixed(4)}</div>
                 <div>Precio sugerido: L {result.totals.suggestedPrice.toFixed(4)}</div>
                 <div>Utilidad: L {result.totals.profit.toFixed(4)}</div>

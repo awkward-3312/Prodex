@@ -1,18 +1,20 @@
 import { supabase } from "@/lib/supabaseClient";
 
-export async function apiFetch(input: RequestInfo, init: RequestInit = {}) {
-  const { data } = await supabase.auth.getSession();
-  const token = data.session?.access_token ?? null;
+type ApiFetchInit = RequestInit & { auth?: boolean };
 
+export async function apiFetch(input: RequestInfo | URL, init: ApiFetchInit = {}) {
   const headers = new Headers(init.headers);
 
-  // solo setea content-type si NO es FormData
-  if (!(init.body instanceof FormData) && !headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
+  const authOn = init.auth !== false;
 
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
+  if (authOn) {
+    const { data, error } = await supabase.auth.getSession();
+    const token = data.session?.access_token;
+
+    console.log("[apiFetch] session?", !!data.session, error?.message ?? null);
+    console.log("[apiFetch] token?", token ? `${token.slice(0, 20)}...${token.slice(-10)}` : null);
+
+    if (token) headers.set("Authorization", `Bearer ${token}`);
   }
 
   return fetch(input, { ...init, headers });
