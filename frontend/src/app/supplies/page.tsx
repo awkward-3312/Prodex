@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { apiFetch } from "@/lib/apiFetch";
+import { RequireAuth } from "@/components/RequireAuth";
 
 type Supply = {
   id: string;
@@ -60,13 +62,25 @@ export default function SuppliesPage() {
   const API = process.env.NEXT_PUBLIC_API_URL;
 
   const loadSupplies = async () => {
-    const res = await fetch(`${API}/supplies`, { cache: "no-store" });
-    const data = await res.json();
-    setSupplies(data);
+    try {
+    const res = await apiFetch(`${API}/supplies`, { cache: "no-store" });
+    const data = await res.json().catch(() => null);
+
+    if (!res.ok) {
+      console.error("loadSupplies error:", res.status, data);
+      alert(`Error ${res.status}: ${data?.error ?? "No autorizado / fallo en backend"}`);
+      return;
+    }
+
+    setSupplies(data as Supply[]);
+  } catch (err) {
+    console.error("Network/JS error:", err);
+    alert("Error de red: no se pudo conectar al backend");
+    }
   };
 
   const createSupply = async () => {
-    await fetch(`${API}/supplies`, {
+    await apiFetch(`${API}/supplies`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -83,7 +97,7 @@ export default function SuppliesPage() {
 
   const addPurchase = async (supplyId: string, qty: number, totalCost: number) => {
     try {
-      const res = await fetch(`${API}/supplies/${supplyId}/purchases`, {
+      const res = await apiFetch(`${API}/supplies/${supplyId}/purchases`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ qty, totalCost }),
@@ -111,6 +125,7 @@ export default function SuppliesPage() {
   }, []);
 
   return (
+  <RequireAuth>
     <main className="min-h-screen p-8 space-y-8">
       <header>
         <h1 className="text-2xl font-semibold">Insumos</h1>
@@ -170,5 +185,6 @@ export default function SuppliesPage() {
         </ul>
       </section>
     </main>
+  </RequireAuth>
   );
 }

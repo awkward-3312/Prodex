@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { supabase } from "../../lib/supabase.js";
+import { supabaseAdmin } from "../../lib/supabase.js";
 
 type DesignLevel = "cliente" | "simple" | "medio" | "pro";
 
@@ -20,6 +20,7 @@ type CreateQuoteBody = {
 
 export async function quotesRoutes(app: FastifyInstance) {
   app.post("/quotes", async (req, reply) => {
+    await app.requireAuth(req);
     const body = req.body as Partial<CreateQuoteBody>;
 
     if (!body.productId) return reply.code(400).send({ error: "productId requerido" });
@@ -40,7 +41,7 @@ export async function quotesRoutes(app: FastifyInstance) {
     const isvRate = Number.isFinite(body.isvRate as number) ? Number(body.isvRate) : 0.15;
 
     // 1) Plantilla activa del producto
-    const { data: tpl, error: tErr } = await supabase
+    const { data: tpl, error: tErr } = await supabaseAdmin
       .from("product_templates")
       .select("id, waste_pct, margin_pct, operational_pct")
       .eq("product_id", body.productId)
@@ -53,7 +54,7 @@ export async function quotesRoutes(app: FastifyInstance) {
     if (!tpl) return reply.code(404).send({ error: "Plantilla activa no encontrada" });
 
     // 2) Items de receta
-    const { data: items, error: iErr } = await supabase
+    const { data: items, error: iErr } = await supabaseAdmin
       .from("template_items")
       .select("id, qty_formula, supply_id")
       .eq("template_id", tpl.id);
@@ -65,7 +66,7 @@ export async function quotesRoutes(app: FastifyInstance) {
       .filter((x): x is string => Boolean(x));
 
     const { data: supplies, error: sErr } = supplyIds.length
-      ? await supabase
+      ? await supabaseAdmin
           .from("supplies")
           .select("id, name, unit_base, cost_per_unit, stock")
           .in("id", supplyIds)
@@ -148,7 +149,7 @@ export async function quotesRoutes(app: FastifyInstance) {
     const total = priceFinal + isvAmount;
 
     // 5) Insertar quote
-    const { data: quote, error: qErr } = await supabase
+    const { data: quote, error: qErr } = await  supabaseAdmin
       .from("quotes")
       .insert({
         product_id: body.productId,
@@ -193,7 +194,7 @@ export async function quotesRoutes(app: FastifyInstance) {
         qty_formula: b.qty_formula,
       }));
 
-      const { error: lErr } = await supabase.from("quote_lines").insert(linesPayload);
+      const { error: lErr } = await supabaseAdmin.from("quote_lines").insert(linesPayload);
       if (lErr) return reply.code(500).send({ error: String(lErr) });
     }
 

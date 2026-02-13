@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { UnitBase } from "./supplies.model.js";
-import { supabase } from "../../lib/supabase.js";
+import { supabaseAdmin } from "../../lib/supabase.js";
 
 function isUnitBase(v: unknown): v is UnitBase {
   return v === "u" || v === "hoja" || v === "ml" || v === "m" || v === "m2";
@@ -9,7 +9,7 @@ function isUnitBase(v: unknown): v is UnitBase {
 export async function suppliesRoutes(app: FastifyInstance) {
   // Listar insumos (desde Supabase)
   app.get("/supplies", async (_req, reply) => {
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from("supplies")
       .select("*")
       .order("created_at", { ascending: false });
@@ -40,7 +40,7 @@ export async function suppliesRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: "stock inválido" });
     }
 
-    const { data, error } = await supabase
+    const { data, error } = await supabaseAdmin
       .from("supplies")
       .insert({
         name: body.name.trim(),

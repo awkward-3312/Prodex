@@ -9,6 +9,8 @@ import { suppliesPurchasesRoutes } from "./modules/supplies/supplies.purchases.r
 import { quotesPreviewRoutes } from "./modules/quotes/quotes.preview.routes.js";
 import { quotesRoutes } from "./modules/quotes/quotes.routes.js";
 import { ordersConvertRoutes } from "./modules/orders/orders.convert.routes.js";
+import { authPlugin } from "./plugins/auth.js";
+import { ok } from "assert";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -18,12 +20,27 @@ dotenv.config({ path: path.resolve(__dirname, "../.env") });
 const app = Fastify({ logger: true });
 
 await app.register(cors, {
-  origin: ["http://localhost:3000"],
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+  origin: (origin, cb) => {
+    const allowed = [
+      "http://localhost:3000",
+      "http://127.0.0.1:3000",
+      "http://192.168.39.186:3000",
+    ];
+
+    // permite requests sin origin (curl/postman)
+    if (!origin) return cb(null, true);
+
+    if (allowed.includes(origin)) return cb(null, true);
+    return cb(new Error("Not allowed by CORS"), false);
+  },
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
 });
 
+app.get("/", async () => ({ ok: true, msg: "ROOT ALIVE" }));
 app.get("/health", async () => ({ ok: true, name: "PRODEX API" }));
 
+await app.register(authPlugin);
 await app.register(suppliesRoutes);
 await app.register(suppliesPurchasesRoutes);
 await app.register(quotesPreviewRoutes);

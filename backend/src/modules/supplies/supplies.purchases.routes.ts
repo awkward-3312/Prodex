@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { supabase } from "../../lib/supabase.js";
+import { supabaseAdmin } from "../../lib/supabase.js";
 
 export async function suppliesPurchasesRoutes(app: FastifyInstance) {
   app.post("/supplies/:id/purchases", async (req, reply) => {
@@ -21,7 +21,7 @@ export async function suppliesPurchasesRoutes(app: FastifyInstance) {
     }
 
     // 1) Traer supply actual
-    const { data: supply, error: sErr } = await supabase
+    const { data: supply, error: sErr } = await supabaseAdmin
       .from("supplies")
       .select("id, stock, cost_per_unit")
       .eq("id", supplyId)
@@ -43,7 +43,7 @@ export async function suppliesPurchasesRoutes(app: FastifyInstance) {
         : (currentStock * currentCpu + totalCost) / newStock;
 
     // 2) Insertar compra
-    const { data: purchase, error: pErr } = await supabase
+    const { data: purchase, error: pErr } = await supabaseAdmin
       .from("supply_purchases")
       .insert({
         supply_id: supplyId,
@@ -57,7 +57,7 @@ export async function suppliesPurchasesRoutes(app: FastifyInstance) {
     if (pErr) return reply.code(500).send({ error: pErr.message });
 
     // 3) Actualizar supply (stock + costo promedio)
-    const { data: updated, error: uErr } = await supabase
+    const { data: updated, error: uErr } = await supabaseAdmin
       .from("supplies")
       .update({
         stock: newStock,

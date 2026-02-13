@@ -2,6 +2,9 @@
 
 import { useState } from "react";
 import { RequireAuth } from "@/components/RequireAuth";
+import { supabase } from "@/lib/supabaseClient";
+import { useRouter } from "next/navigation";
+import { apiFetch } from "@/lib/apiFetch";
 
 type DesignLevel = "cliente" | "simple" | "medio" | "pro";
 
@@ -65,11 +68,18 @@ export default function QuotePreviewPage() {
   const [result, setResult] = useState<PreviewResponse | null>(null);
   const [saved, setSaved] = useState<CreateQuoteResponse | null>(null);
 
+  const router = useRouter();
+
+  const logout = async () => {
+    await supabase.auth.signOut();
+    router.replace("/login");
+  };
+
   const preview = async () => {
     setSaved(null);
 
     try {
-      const res = await fetch(`${API}/quotes/preview`, {
+      const res = await apiFetch(`${API}/quotes/preview`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -101,7 +111,7 @@ export default function QuotePreviewPage() {
 
   const saveQuote = async () => {
     try {
-      const res = await fetch(`${API}/quotes`, {
+      const res = await apiFetch(`${API}/quotes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -137,7 +147,7 @@ export default function QuotePreviewPage() {
     if (!saved?.quoteId) return;
 
     try {
-      const res = await fetch(`${API}/quotes/${saved.quoteId}/convert`, {
+      const res = await apiFetch(`${API}/quotes/${saved.quoteId}/convert`, {
         method: "POST",
       });
 
@@ -189,129 +199,144 @@ export default function QuotePreviewPage() {
 
   return (
     <RequireAuth>
-    <main className="min-h-screen p-8 space-y-6">
-      <h1 className="text-2xl font-semibold">Cotización (preview + guardar + convertir)</h1>
-
-      <div className="border rounded-lg p-4 max-w-xl space-y-3">
-        <div className="space-y-1">
-          <label className="text-sm opacity-70">Product ID (Taza sublimable)</label>
-          <input
-            className="border p-2 w-full rounded"
-            placeholder="Pega aquí el productId (uuid)"
-            value={productId}
-            onChange={(e) => setProductId(e.target.value)}
-          />
-        </div>
-
-        <div className="flex flex-wrap gap-3">
-          <div className="flex flex-col">
-            <label className="text-sm opacity-70">Cantidad</label>
-            <input
-              className="border p-2 rounded w-40"
-              type="number"
-              value={cantidad}
-              onChange={(e) => setCantidad(Number(e.target.value))}
-              min={1}
-            />
-          </div>
-
-          <div className="flex flex-col">
-            <label className="text-sm opacity-70">Diseño</label>
-            <select
-              className="border p-2 rounded w-44"
-              value={design}
-              onChange={(e) => setDesign(e.target.value as DesignLevel)}
-            >
-              <option value="cliente">Cliente trae</option>
-              <option value="simple">Simple (L300)</option>
-              <option value="medio">Medio (L500)</option>
-              <option value="pro">Pro (L700)</option>
-            </select>
-          </div>
-
-          <div className="flex items-end gap-2">
-            <input
-              id="isv"
-              type="checkbox"
-              checked={applyIsv}
-              onChange={(e) => setApplyIsv(e.target.checked)}
-            />
-            <label htmlFor="isv" className="text-sm">
-              Aplicar ISV 15%
-            </label>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <button className="bg-blue-600 text-white px-4 py-2 rounded" onClick={preview}>
-            Calcular (preview)
-          </button>
-
-          <button className="bg-green-600 text-white px-4 py-2 rounded" onClick={saveQuote}>
-            Guardar cotización
-          </button>
-
+      <main className="min-h-screen p-8 space-y-6">
+        <div className="flex justify-end">
           <button
-            className="bg-purple-600 text-white px-4 py-2 rounded disabled:opacity-50"
-            onClick={convertToOrder}
-            disabled={!saved?.quoteId}
+            className="text-red-600 border border-red-600 px-3 py-1 rounded"
+            onClick={logout}
           >
-            Convertir a pedido
+            Cerrar sesión
           </button>
         </div>
-      </div>
 
-      {saved && (
-        <div className="border rounded-lg p-4 max-w-xl space-y-2">
-          <h2 className="font-semibold">Cotización guardada</h2>
-          <div className="text-sm">ID: {saved.quoteId}</div>
-          <div className="text-sm">Estado: {saved.quote.status}</div>
-          <div className="text-sm">Subtotal: L {Number(saved.quote.price_final).toFixed(2)}</div>
-          <div className="text-sm">ISV: L {Number(saved.quote.isv_amount).toFixed(2)}</div>
-          <div className="font-medium">Total: L {Number(saved.quote.total).toFixed(2)}</div>
-          <div className="text-xs opacity-70">Expira: {saved.quote.expires_at}</div>
+        <h1 className="text-2xl font-semibold">
+          Cotización (preview + guardar + convertir)
+        </h1>
+
+        <div className="border rounded-lg p-4 max-w-xl space-y-3">
+          <div className="space-y-1">
+            <label className="text-sm opacity-70">Product ID</label>
+            <input
+              className="border p-2 w-full rounded"
+              placeholder="Pega aquí el productId (uuid)"
+              value={productId}
+              onChange={(e) => setProductId(e.target.value)}
+            />
+          </div>
+
+          <div className="flex flex-wrap gap-3">
+            <div className="flex flex-col">
+              <label className="text-sm opacity-70">Cantidad</label>
+              <input
+                className="border p-2 rounded w-40"
+                type="number"
+                value={cantidad}
+                onChange={(e) => setCantidad(Number(e.target.value))}
+                min={1}
+              />
+            </div>
+
+            <div className="flex flex-col">
+              <label className="text-sm opacity-70">Diseño</label>
+              <select
+                className="border p-2 rounded w-44"
+                value={design}
+                onChange={(e) => setDesign(e.target.value as DesignLevel)}
+              >
+                <option value="cliente">Cliente trae</option>
+                <option value="simple">Simple (L300)</option>
+                <option value="medio">Medio (L500)</option>
+                <option value="pro">Pro (L700)</option>
+              </select>
+            </div>
+
+            <div className="flex items-end gap-2">
+              <input
+                id="isv"
+                type="checkbox"
+                checked={applyIsv}
+                onChange={(e) => setApplyIsv(e.target.checked)}
+              />
+              <label htmlFor="isv" className="text-sm">
+                Aplicar ISV 15%
+              </label>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <button className="bg-blue-600 text-white px-4 py-2 rounded" onClick={preview}>
+              Calcular (preview)
+            </button>
+
+            <button className="bg-green-600 text-white px-4 py-2 rounded" onClick={saveQuote}>
+              Guardar cotización
+            </button>
+
+            <button
+              className="bg-purple-600 text-white px-4 py-2 rounded disabled:opacity-50"
+              onClick={convertToOrder}
+              disabled={!saved?.quoteId}
+            >
+              Convertir a pedido
+            </button>
+          </div>
         </div>
-      )}
 
-      {result && (
-        <div className="space-y-4">
-          <div className="border rounded-lg p-4">
-            <h2 className="font-semibold mb-2">Desglose (preview)</h2>
-            <div className="space-y-2">
-              {result.breakdown.map((b, idx) => (
-                <div key={idx} className="text-sm border rounded p-2">
-                  <div className="font-medium">{b.supplyName}</div>
-                  <div className="opacity-80">
-                    qty: {b.qty} {b.unitBase} — cpu: L {b.costPerUnit.toFixed(4)} — costo: L{" "}
-                    {b.lineCost.toFixed(4)}
+        {saved && (
+          <div className="border rounded-lg p-4 max-w-xl space-y-2">
+            <h2 className="font-semibold">Cotización guardada</h2>
+            <div className="text-sm">ID: {saved.quoteId}</div>
+            <div className="text-sm">Estado: {saved.quote.status}</div>
+            <div className="text-sm">
+              Subtotal: L {Number(saved.quote.price_final).toFixed(2)}
+            </div>
+            <div className="text-sm">ISV: L {Number(saved.quote.isv_amount).toFixed(2)}</div>
+            <div className="font-medium">Total: L {Number(saved.quote.total).toFixed(2)}</div>
+            <div className="text-xs opacity-70">Expira: {saved.quote.expires_at}</div>
+          </div>
+        )}
+
+        {result && (
+          <div className="space-y-4">
+            <div className="border rounded-lg p-4">
+              <h2 className="font-semibold mb-2">Desglose (preview)</h2>
+              <div className="space-y-2">
+                {result.breakdown.map((b, idx) => (
+                  <div key={idx} className="text-sm border rounded p-2">
+                    <div className="font-medium">{b.supplyName}</div>
+                    <div className="opacity-80">
+                      qty: {b.qty} {b.unitBase} — cpu: L {b.costPerUnit.toFixed(4)} — costo:
+                      L {b.lineCost.toFixed(4)}
+                    </div>
+                    <div className="opacity-60">fórmula: {b.formula}</div>
                   </div>
-                  <div className="opacity-60">fórmula: {b.formula}</div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
 
-          <div className="border rounded-lg p-4">
-            <h2 className="font-semibold mb-2">Totales (preview)</h2>
-            <div className="text-sm space-y-1">
-              <div>Materiales: L {result.totals.materialsCost.toFixed(4)}</div>
-              <div>Merma: L {result.totals.wasteCost.toFixed(4)}</div>
-              <div>Operativo: L {result.totals.operationalCost.toFixed(4)}</div>
-              <div>Diseño: L {result.totals.designCost.toFixed(2)}</div>
-              <hr className="my-2" />
-              <div className="font-medium">Costo total: L {result.totals.costTotal.toFixed(4)}</div>
-              <div>Precio mínimo: L {result.totals.minPrice.toFixed(4)}</div>
-              <div>Precio sugerido: L {result.totals.suggestedPrice.toFixed(4)}</div>
-              <div>Utilidad: L {result.totals.profit.toFixed(4)}</div>
-              <div>Margen real: {(result.totals.marginReal * 100).toFixed(2)}%</div>
-              <hr className="my-2" />
-              <div>ISV: L {result.totals.isv.toFixed(4)}</div>
-              <div className="font-medium">Total: L {result.totals.total.toFixed(4)}</div>
+            <div className="border rounded-lg p-4">
+              <h2 className="font-semibold mb-2">Totales (preview)</h2>
+              <div className="text-sm space-y-1">
+                <div>Materiales: L {result.totals.materialsCost.toFixed(4)}</div>
+                <div>Merma: L {result.totals.wasteCost.toFixed(4)}</div>
+                <div>Operativo: L {result.totals.operationalCost.toFixed(4)}</div>
+                <div>Diseño: L {result.totals.designCost.toFixed(2)}</div>
+                <hr className="my-2" />
+                <div className="font-medium">
+                  Costo total: L {result.totals.costTotal.toFixed(4)}
+                </div>
+                <div>Precio mínimo: L {result.totals.minPrice.toFixed(4)}</div>
+                <div>Precio sugerido: L {result.totals.suggestedPrice.toFixed(4)}</div>
+                <div>Utilidad: L {result.totals.profit.toFixed(4)}</div>
+                <div>Margen real: {(result.totals.marginReal * 100).toFixed(2)}%</div>
+                <hr className="my-2" />
+                <div>ISV: L {result.totals.isv.toFixed(4)}</div>
+                <div className="font-medium">Total: L {result.totals.total.toFixed(4)}</div>
+              </div>
             </div>
           </div>
-        </div>
-      )}
-      </requireAuth>
-    </main>
+        )}
+      </main>
+    </RequireAuth>
   );
 }

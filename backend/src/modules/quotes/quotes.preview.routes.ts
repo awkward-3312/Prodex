@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { supabase } from "../../lib/supabase.js";
+import { supabaseAdmin } from "../../lib/supabase.js";
 
 type DesignLevel = "cliente" | "simple" | "medio" | "pro";
 
@@ -19,6 +19,7 @@ type PreviewBody = {
 
 export async function quotesPreviewRoutes(app: FastifyInstance) {
   app.post("/quotes/preview", async (req, reply) => {
+    await app.requireAuth(req);
     const body = req.body as Partial<PreviewBody>;
 
     if (!body.productId) return reply.code(400).send({ error: "productId requerido" });
@@ -40,7 +41,7 @@ export async function quotesPreviewRoutes(app: FastifyInstance) {
     const isvRate = Number.isFinite(body.isvRate as number) ? Number(body.isvRate) : 0.15;
 
     // 1) Plantilla activa del producto
-    const { data: tpl, error: tErr } = await supabase
+    const { data: tpl, error: tErr } = await supabaseAdmin
       .from("product_templates")
       .select("id, waste_pct, margin_pct, operational_pct")
       .eq("product_id", body.productId)
@@ -53,7 +54,7 @@ export async function quotesPreviewRoutes(app: FastifyInstance) {
     if (!tpl) return reply.code(404).send({ error: "Plantilla activa no encontrada" });
 
     // 2) Items de receta (sin join)
-    const { data: items, error: iErr } = await supabase
+    const { data: items, error: iErr } = await supabaseAdmin
       .from("template_items")
       .select("id, qty_formula, supply_id")
       .eq("template_id", tpl.id);
@@ -93,7 +94,7 @@ export async function quotesPreviewRoutes(app: FastifyInstance) {
     }
 
     // 3) Buscar supplies por ids
-    const { data: supplies, error: sErr } = await supabase
+    const { data: supplies, error: sErr } = await supabaseAdmin
       .from("supplies")
       .select("id, name, unit_base, cost_per_unit")
       .in("id", supplyIds);

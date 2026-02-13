@@ -7,6 +7,6 @@ if (!url || !serviceKey) {
   throw new Error("Faltan SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY en backend/.env");
 }
 
-export const supabase = createClient(url, serviceKey, {
+export const supabaseAdmin = createClient(url, serviceKey, {
   auth: { persistSession: false },
 });

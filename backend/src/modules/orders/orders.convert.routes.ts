@@ -1,15 +1,16 @@
 import type { FastifyInstance } from "fastify";
-import { supabase } from "../../lib/supabase.js";
+import { supabaseAdmin } from "../../lib/supabase.js";
 
 export async function ordersConvertRoutes(app: FastifyInstance) {
   app.post("/quotes/:id/convert", async (req, reply) => {
+    await app.requireAuth(req);
     const params = req.params as { id?: string };
     const quoteId = params.id;
 
     if (!quoteId) return reply.code(400).send({ error: "quote id requerido" });
 
     // 1) Leer quote
-    const { data: quote, error: qErr } = await supabase
+    const { data: quote, error: qErr } = await supabaseAdmin
       .from("quotes")
       .select("id, status, expires_at")
       .eq("id", quoteId)
@@ -20,7 +21,7 @@ export async function ordersConvertRoutes(app: FastifyInstance) {
     const expiresAt = new Date(String((quote as any).expires_at));
     if (expiresAt.getTime() < Date.now()) {
       // marcar expired
-      await supabase.from("quotes").update({ status: "expired" }).eq("id", quoteId);
+      await supabaseAdmin.from("quotes").update({ status: "expired" }).eq("id", quoteId);
       return reply.code(400).send({ error: "Cotización expirada" });
     }
 
@@ -29,7 +30,7 @@ export async function ordersConvertRoutes(app: FastifyInstance) {
     }
 
     // 2) Leer líneas
-    const { data: lines, error: lErr } = await supabase
+    const { data: lines, error: lErr } = await supabaseAdmin
       .from("quote_lines")
       .select("supply_id, qty, supply_name")
       .eq("quote_id", quoteId);
@@ -39,7 +40,7 @@ export async function ordersConvertRoutes(app: FastifyInstance) {
     const supplyIds = (lines ?? []).map((l) => (l as any).supply_id).filter(Boolean);
 
     // 3) Leer stocks actuales
-    const { data: supplies, error: sErr } = await supabase
+    const { data: supplies, error: sErr } = await   supabaseAdmin
       .from("supplies")
       .select("id, stock, name")
       .in("id", supplyIds);
@@ -76,7 +77,7 @@ export async function ordersConvertRoutes(app: FastifyInstance) {
       const available = stockById.get(supplyId) ?? 0;
       const newStock = available - needed;
 
-      const { error: uErr } = await supabase
+      const { error: uErr } = await supabaseAdmin
         .from("supplies")
         .update({ stock: newStock })
         .eq("id", supplyId);
@@ -85,7 +86,7 @@ export async function ordersConvertRoutes(app: FastifyInstance) {
     }
 
     // 6) Marcar quote como converted
-    const { data: updated, error: upErr } = await supabase
+    const { data: updated, error: upErr } = await supabaseAdmin
       .from("quotes")
       .update({ status: "converted" })
       .eq("id", quoteId)
