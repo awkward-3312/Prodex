@@ -1,9 +1,60 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { supabaseAdmin } from "../../lib/supabase.js";
 
+type Role = "admin" | "supervisor" | "vendedor";
+
+type ConvertBody = {
+  supervisorEmail?: string;
+  supervisorPassword?: string;
+};
+
 export async function ordersConvertRoutes(app: FastifyInstance) {
-  app.post("/quotes/:id/convert", async (req, reply) => {
+  app.post("/quotes/:id/convert", async (req: FastifyRequest, reply) => {
     await app.requireAuth(req);
+
+    const role = req.auth?.role as Role | undefined;
+
+    // 🔒 Gate: si es vendedor, pedir credenciales de supervisor
+    if (role === "vendedor") {
+      const body = (req.body ?? {}) as ConvertBody;
+
+      if (!body.supervisorEmail || !body.supervisorPassword) {
+        return reply.code(400).send({
+          error: "Aprobación requerida: supervisorEmail y supervisorPassword",
+        });
+      }
+
+      // 1) Login supervisor (NO crea sesión persistente; es server)
+      const { data: signData, error: signErr } =
+        await supabaseAdmin.auth.signInWithPassword({
+          email: body.supervisorEmail,
+          password: body.supervisorPassword,
+        });
+
+      if (signErr || !signData.user?.id) {
+        return reply.code(401).send({ error: "Credenciales de supervisor inválidas" });
+      }
+
+      // 2) Validar rol en profiles
+      const supervisorId = signData.user.id;
+
+      const { data: profile, error: pErr } = await supabaseAdmin
+        .from("profiles")
+        .select("role")
+        .eq("id", supervisorId)
+        .single();
+
+      if (pErr || !profile?.role) {
+        return reply.code(403).send({ error: "Perfil de supervisor no encontrado" });
+      }
+
+      if (profile.role !== "admin" && profile.role !== "supervisor") {
+        return reply.code(403).send({ error: "No autorizado: requiere admin/supervisor" });
+      }
+    }
+
+    // ✅ TU LÓGICA EXISTENTE (igualita, solo la dejé abajo)
+
     const params = req.params as { id?: string };
     const quoteId = params.id;
 
@@ -26,7 +77,9 @@ export async function ordersConvertRoutes(app: FastifyInstance) {
     }
 
     if ((quote as any).status !== "draft" && (quote as any).status !== "approved") {
-      return reply.code(400).send({ error: `No se puede convertir en estado ${(quote as any).status}` });
+      return reply
+        .code(400)
+        .send({ error: `No se puede convertir en estado ${(quote as any).status}` });
     }
 
     // 2) Leer líneas
@@ -37,10 +90,12 @@ export async function ordersConvertRoutes(app: FastifyInstance) {
 
     if (lErr) return reply.code(500).send({ error: String(lErr) });
 
-    const supplyIds = (lines ?? []).map((l) => (l as any).supply_id).filter(Boolean);
+    const supplyIds = (lines ?? [])
+      .map((l) => (l as any).supply_id)
+      .filter(Boolean);
 
     // 3) Leer stocks actuales
-    const { data: supplies, error: sErr } = await   supabaseAdmin
+    const { data: supplies, error: sErr } = await supabaseAdmin
       .from("supplies")
       .select("id, stock, name")
       .in("id", supplyIds);

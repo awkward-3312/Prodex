@@ -79,7 +79,8 @@ export default function QuotePreviewPage() {
     void (async () => {
       try {
         const res = await apiFetch(`${API}/me`);
-        const data = (await res.json().catch(() => null)) as unknown;
+        const raw = await res.text().catch(() => "");
+        const data: unknown = raw ? (() => { try { return JSON.parse(raw); } catch { return raw; } })() : null;
 
         if (!alive) return;
 
@@ -140,6 +141,8 @@ export default function QuotePreviewPage() {
         const errMsg =
           typeof data === "object" && data !== null && "error" in data
             ? String((data as { error?: unknown }).error ?? "No se pudo cotizar")
+            : typeof data === "string"
+            ? data
             : "No se pudo cotizar";
         console.error("preview error:", res.status, data);
         alert(`Error ${res.status}: ${errMsg}`);
@@ -188,58 +191,71 @@ export default function QuotePreviewPage() {
   };
 
   const convertToOrder = async () => {
-    if (!saved?.quoteId) return;
+  if (!saved?.quoteId) return;
 
-    try {
-      const res = await apiFetch(`${API}/quotes/${saved.quoteId}/convert`, {
-        method: "POST",
-      });
+  try {
+    // ✅ si es vendedor, pedimos credenciales de supervisor
+    let body: { supervisorEmail: string; supervisorPassword: string } | undefined;
 
-      const data = (await res.json().catch(() => null)) as unknown;
+    if (meInfo?.role === "vendedor") {
+      const supervisorEmail = window.prompt("Email del supervisor:");
+      if (!supervisorEmail) return;
 
-      if (!res.ok) {
-        let errMsg = "No se pudo convertir";
-        let missing: MissingItem[] | undefined;
+      const supervisorPassword = window.prompt("Contraseña del supervisor:");
+      if (!supervisorPassword) return;
 
-        if (typeof data === "object" && data !== null) {
-          const d = data as Partial<ConvertErr>;
-          if (d.error) errMsg = String(d.error);
-
-          if (Array.isArray(d.missing)) {
-            missing = d.missing.map((m) => ({
-              supplyId: String((m as Partial<MissingItem>).supplyId ?? ""),
-              name: String((m as Partial<MissingItem>).name ?? ""),
-              needed: Number((m as Partial<MissingItem>).needed ?? 0),
-              available: Number((m as Partial<MissingItem>).available ?? 0),
-            }));
-          }
-        }
-
-        console.error("convert error:", res.status, data);
-
-        if (missing?.length) {
-          const msg = missing
-            .map((m) => `${m.name}: necesitas ${m.needed}, hay ${m.available}`)
-            .join("\n");
-          alert(`Stock insuficiente:\n${msg}`);
-        } else {
-          alert(`Error ${res.status}: ${errMsg}`);
-        }
-        return;
-      }
-
-      const okData = data as ConvertResponse;
-      if ("ok" in okData && okData.ok) {
-        alert("Convertido a pedido ✅ (stock descontado)");
-        setSaved((prev) =>
-          prev ? { ...prev, quote: { ...prev.quote, status: "converted" } } : prev
-        );
-      }
-    } catch (e) {
-      console.error(e);
-      alert("Error de red");
+      body = { supervisorEmail, supervisorPassword };
     }
-  };
+
+    const res = await apiFetch(`${API}/quotes/${saved.quoteId}/convert`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+    const data = (await res.json().catch(() => null)) as unknown;
+
+    if (!res.ok) {
+      let errMsg = "No se pudo convertir";
+      let missing: MissingItem[] | undefined;
+
+      if (typeof data === "object" && data !== null) {
+        const d = data as Partial<ConvertErr>;
+        if (d.error) errMsg = String(d.error);
+
+        if (Array.isArray(d.missing)) {
+          missing = d.missing.map((m) => ({
+            supplyId: String((m as Partial<MissingItem>).supplyId ?? ""),
+            name: String((m as Partial<MissingItem>).name ?? ""),
+            needed: Number((m as Partial<MissingItem>).needed ?? 0),
+            available: Number((m as Partial<MissingItem>).available ?? 0),
+          }));
+        }
+      }
+
+      if (missing?.length) {
+        const msg = missing
+          .map((m) => `${m.name}: necesitas ${m.needed}, hay ${m.available}`)
+          .join("\n");
+        alert(`Stock insuficiente:\n${msg}`);
+      } else {
+        alert(`Error ${res.status}: ${errMsg}`);
+      }
+      return;
+    }
+
+    const okData = data as ConvertResponse;
+    if ("ok" in okData && okData.ok) {
+      alert("Convertido a pedido ✅ (stock descontado)");
+      setSaved((prev) =>
+        prev ? { ...prev, quote: { ...prev.quote, status: "converted" } } : prev
+      );
+    }
+  } catch (e) {
+    console.error(e);
+    alert("Error de red");
+  }
+};
 
   return (
     <RequireAuth>
@@ -322,7 +338,10 @@ export default function QuotePreviewPage() {
           </div>
 
           <div className="flex flex-wrap gap-2">
-            <button className="bg-blue-600 text-white px-4 py-2 rounded" onClick={preview}>
+            <button className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-50"
+            onClick={preview}
+              disabled={!productId.trim()}
+            >
               Calcular (preview)
             </button>
 
