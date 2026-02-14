@@ -12,6 +12,9 @@ import { ordersConvertRoutes } from "./modules/orders/orders.convert.routes.js";
 import authPlugin from "./plugins/auth.js";
 import authMeRoutes from "./modules/auth/auth.me.routes.js";
 import { productsRoutes } from "./modules/products/products.routes.js";
+import { dashboardRoutes } from "./modules/dashboard/dashboard.routes";
+import { quoteGroupsRoutes } from "./modules/quote-groups/quote-groups.routes.js";
+import { customersRoutes } from "./modules/customers/customers.routes.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -48,9 +51,12 @@ await app.register(suppliesRoutes);
 await app.register(suppliesPurchasesRoutes);
 await app.register(quotesPreviewRoutes);
 await app.register(quotesRoutes);
+await app.register(quoteGroupsRoutes);
 await app.register(ordersConvertRoutes);
 await app.register(authMeRoutes);
 await app.register(productsRoutes);
+await app.register(dashboardRoutes);
+await app.register(customersRoutes);
 
 app.listen({ port: 4000, host: "0.0.0.0" }).catch((err) => {
   app.log.error(err);

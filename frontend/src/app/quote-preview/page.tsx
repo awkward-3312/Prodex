@@ -1,8 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { RequireAuth } from "@/components/RequireAuth";
-import { supabase } from "@/lib/supabaseClient";
 import { useRouter, useSearchParams } from "next/navigation";
 import { apiFetch } from "@/lib/apiFetch";
 import { AppShell } from "@/components/AppShell";
@@ -62,6 +61,17 @@ type CreateQuoteResponse = {
   };
 };
 
+type CreateQuoteGroupResponse = {
+  groupId: string;
+  group: {
+    id: string;
+    status: string;
+    price_final: number;
+    isv_amount: number;
+    total: number;
+  };
+};
+
 type MissingItem = {
   supplyId: string;
   name: string;
@@ -76,6 +86,32 @@ type ConvertResponse = ConvertOk | ConvertErr;
 type ProductSuggestion = {
   id: string;
   name?: string | null;
+};
+
+type CustomerSuggestion = {
+  id: string;
+  name?: string | null;
+  rtn?: string | null;
+};
+
+type CartItem = {
+  id: string;
+  productId: string;
+  productLabel: string;
+  inputs: { cantidad: number; diseño: DesignLevel };
+  applyIsv: boolean;
+  isvRate: number;
+  priceFinal: number;
+  suggestedPrice: number;
+  totalWithIsv: number;
+  isvAmount: number;
+  discount: {
+    type: DiscountType;
+    season?: DiscountSeason;
+    reason: string;
+    amount: number;
+  } | null;
+  breakdown: PreviewResponse["breakdown"];
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -95,6 +131,21 @@ export default function QuotePreviewPage() {
     "idle"
   );
 
+  const [customerEnabled, setCustomerEnabled] = useState(false);
+  const [customerQuery, setCustomerQuery] = useState("");
+  const [customerSuggestions, setCustomerSuggestions] = useState<CustomerSuggestion[]>([]);
+  const [isSuggestingCustomer, setIsSuggestingCustomer] = useState(false);
+  const [showCustomerSuggestions, setShowCustomerSuggestions] = useState(false);
+  const [selectedCustomer, setSelectedCustomer] = useState<CustomerSuggestion | null>(null);
+  const [newCustomer, setNewCustomer] = useState({
+    name: "",
+    rtn: "",
+    phone: "",
+    email: "",
+    address: "",
+    notes: "",
+  });
+
   const [cantidad, setCantidad] = useState<number>(1);
   const [design, setDesign] = useState<DesignLevel>("cliente");
   const [applyIsv, setApplyIsv] = useState<boolean>(false);
@@ -107,6 +158,9 @@ export default function QuotePreviewPage() {
 
   const [result, setResult] = useState<PreviewResponse | null>(null);
   const [saved, setSaved] = useState<CreateQuoteResponse | null>(null);
+  const [cartItems, setCartItems] = useState<CartItem[]>([]);
+  const [savedGroup, setSavedGroup] = useState<CreateQuoteGroupResponse | null>(null);
+  const [showAggregatedBreakdown, setShowAggregatedBreakdown] = useState(true);
 
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -114,7 +168,9 @@ export default function QuotePreviewPage() {
   const [missingItems, setMissingItems] = useState<MissingItem[]>([]);
 
   const blurTimeoutRef = useRef<number | null>(null);
+  const customerBlurTimeoutRef = useRef<number | null>(null);
   const productInputRef = useRef<HTMLInputElement>(null);
+  const customerInputRef = useRef<HTMLInputElement>(null);
   const lastAppliedParamsRef = useRef<string | null>(null);
 
   const [meInfo, setMeInfo] = useState<{
@@ -129,6 +185,13 @@ export default function QuotePreviewPage() {
       blurTimeoutRef.current = null;
     }
   }, [showSuggestions]);
+
+  useEffect(() => {
+    if (customerBlurTimeoutRef.current) {
+      window.clearTimeout(customerBlurTimeoutRef.current);
+      customerBlurTimeoutRef.current = null;
+    }
+  }, [showCustomerSuggestions]);
 
   useEffect(() => {
     const key = searchParams.toString();
@@ -156,6 +219,56 @@ export default function QuotePreviewPage() {
 
     lastAppliedParamsRef.current = key;
   }, [searchParams]);
+
+  useEffect(() => {
+    if (!customerEnabled) {
+      setCustomerQuery("");
+      setCustomerSuggestions([]);
+      setSelectedCustomer(null);
+      setShowCustomerSuggestions(false);
+      setNewCustomer({ name: "", rtn: "", phone: "", email: "", address: "", notes: "" });
+    }
+  }, [customerEnabled]);
+
+  useEffect(() => {
+    if (!customerEnabled || selectedCustomer) return;
+    if (!newCustomer.name && customerQuery.trim()) {
+      setNewCustomer((prev) => ({ ...prev, name: customerQuery.trim() }));
+    }
+  }, [customerEnabled, customerQuery, newCustomer.name, selectedCustomer]);
+
+  useEffect(() => {
+    if (!customerEnabled) return;
+    const term = customerQuery.trim();
+    if (term.length < 2) {
+      setCustomerSuggestions([]);
+      return;
+    }
+    const handle = window.setTimeout(() => {
+      void (async () => {
+        setIsSuggestingCustomer(true);
+        try {
+          const res = await apiFetch(
+            `${API}/customers?search=${encodeURIComponent(term)}&limit=20`,
+            { cache: "no-store" }
+          );
+          const data = (await res.json().catch(() => null)) as unknown;
+          if (!res.ok) {
+            setCustomerSuggestions([]);
+            return;
+          }
+          const list = Array.isArray(data) ? (data as CustomerSuggestion[]) : [];
+          setCustomerSuggestions(list);
+        } catch {
+          setCustomerSuggestions([]);
+        } finally {
+          setIsSuggestingCustomer(false);
+        }
+      })();
+    }, 250);
+
+    return () => window.clearTimeout(handle);
+  }, [API, customerEnabled, customerQuery]);
 
   useEffect(() => {
     if (discountType === "none") {
@@ -334,18 +447,6 @@ export default function QuotePreviewPage() {
     }
   };
 
-  const testMe = async () => {
-    const res = await apiFetch(`${API}/me`);
-    const data = await res.json().catch(() => null);
-    console.log("ME:", res.status, data);
-    toast("info", `ME ${res.status}: ${JSON.stringify(data)}`);
-  };
-
-  const logout = async () => {
-    await supabase.auth.signOut();
-    router.replace("/login");
-  };
-
   const handleProductInput = (value: string) => {
     setProductQuery(value);
     setSelectedProduct(null);
@@ -373,11 +474,7 @@ export default function QuotePreviewPage() {
     }, 150);
   };
 
-  const preview = async () => {
-    setSaved(null);
-    setMissingItems([]);
-    setIsPreviewing(true);
-
+  const requestPreview = async (): Promise<PreviewResponse | null> => {
     try {
       const res = await apiFetch(`${API}/quotes/preview`, {
         method: "POST",
@@ -401,32 +498,42 @@ export default function QuotePreviewPage() {
             : "No se pudo cotizar";
         console.error("preview error:", res.status, data);
         toast("error", `Error ${res.status}: ${errMsg}`);
-        return;
+        return null;
       }
 
-      setResult(data as PreviewResponse);
+      return data as PreviewResponse;
     } catch (e) {
       console.error(e);
       toast("error", "Error de red");
-    } finally {
-      setIsPreviewing(false);
+      return null;
     }
   };
 
-  const saveQuote = async () => {
-    if (!result) {
-      toast("error", "Calcula el preview antes de guardar");
-      return;
+  const preview = async () => {
+    setSaved(null);
+    setMissingItems([]);
+    setIsPreviewing(true);
+    const data = await requestPreview();
+    if (data) setResult(data);
+    setIsPreviewing(false);
+  };
+
+  const handleCustomerBlur = () => {
+    if (customerBlurTimeoutRef.current) {
+      window.clearTimeout(customerBlurTimeoutRef.current);
     }
+    customerBlurTimeoutRef.current = window.setTimeout(() => {
+      setShowCustomerSuggestions(false);
+    }, 120);
+  };
 
-    const suggestedPrice = Number(result.totals.suggestedPrice ?? 0);
-    const finalPrice = Number.isFinite(priceFinal) ? priceFinal : suggestedPrice;
+  const handleSelectCustomer = (customer: CustomerSuggestion) => {
+    setSelectedCustomer(customer);
+    setCustomerQuery(customer.name ?? customer.id);
+    setShowCustomerSuggestions(false);
+  };
 
-    if (!Number.isFinite(finalPrice) || finalPrice <= 0) {
-      toast("error", "Precio final inválido");
-      return;
-    }
-
+  const addToCart = async () => {
     const discountReasonTrimmed = discountReason.trim();
     const discountRequested = discountType !== "none";
     if (discountRequested) {
@@ -448,52 +555,209 @@ export default function QuotePreviewPage() {
       }
     }
 
+    let previewData = result;
+    if (!previewData) {
+      setIsPreviewing(true);
+      previewData = await requestPreview();
+      setIsPreviewing(false);
+      if (!previewData) return;
+      setResult(previewData);
+    }
+
+    const suggested = Number(previewData.totals.suggestedPrice ?? 0);
+    const discountPctLocal =
+      discountType === "none" ? 0 : Math.max(0, Number(discountAmount) || 0);
+    const effectiveDiscountAmountLocal =
+      suggested > 0 ? (suggested * discountPctLocal) / 100 : 0;
+    const autoPriceWithDiscountLocal = Math.max(0, suggested - effectiveDiscountAmountLocal);
+    const finalPriceLocal =
+      priceFinalMode === "manual" && Number.isFinite(priceFinal) && priceFinal > 0
+        ? priceFinal
+        : autoPriceWithDiscountLocal;
+
+    if (!Number.isFinite(finalPriceLocal) || finalPriceLocal <= 0) {
+      toast("error", "Precio final inválido");
+      return;
+    }
+
+    const isvAmountLocal = applyIsv ? finalPriceLocal * effectiveIsvRate : 0;
+    const totalWithIsvLocal = finalPriceLocal + isvAmountLocal;
+
+    const label =
+      selectedProduct?.name ||
+      (productQuery.trim() ? productQuery.trim() : productId.slice(0, 8));
+
+    const newItem: CartItem = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      productId,
+      productLabel: label,
+      inputs: { cantidad, diseño: design },
+      applyIsv,
+      isvRate: effectiveIsvRate,
+      priceFinal: finalPriceLocal,
+      suggestedPrice: suggested,
+      totalWithIsv: totalWithIsvLocal,
+      isvAmount: isvAmountLocal,
+      discount: discountRequested
+        ? {
+            type: discountType,
+            season: discountType === "seasonal" ? discountSeason : undefined,
+            reason: discountReasonTrimmed,
+            amount: Number(discountAmount),
+          }
+        : null,
+      breakdown: previewData.breakdown ?? [],
+    };
+
+    setCartItems((prev) => [...prev, newItem]);
+    setResult(null);
+    setSaved(null);
+    setSavedGroup(null);
+    setMissingItems([]);
+    setProductId("");
+    setProductQuery("");
+    setSelectedProduct(null);
+    setProductStatus("idle");
+    setCantidad(1);
+    setDesign("cliente");
+    setApplyIsv(false);
+    setPriceFinal(0);
+    setPriceFinalMode("auto");
+    setDiscountType("none");
+    setDiscountAmount(0);
+    setDiscountReason("");
+    setDiscountSeason("navidad");
+    toast("success", "Producto agregado a la cotización");
+  };
+
+  const removeCartItem = (id: string) => {
+    setCartItems((prev) => prev.filter((it) => it.id !== id));
+  };
+
+  const saveGroup = async () => {
+    if (customerEnabled && !selectedCustomer && !newCustomer.name.trim()) {
+      toast("error", "Ingresa el nombre del cliente o selecciona uno existente");
+      return;
+    }
+    const itemsToSave = [...cartItems];
+
+    if (canSave) {
+      const discountReasonTrimmed = discountReason.trim();
+      const discountRequested = discountType !== "none";
+      if (discountRequested) {
+        if (!Number.isFinite(discountAmount) || discountAmount <= 0 || discountAmount >= 100) {
+          toast("error", "Porcentaje de descuento inválido");
+          return;
+        }
+        if (!discountReasonTrimmed) {
+          toast("error", "Explicación de descuento requerida");
+          return;
+        }
+        if (discountType === "seasonal" && !discountSeason) {
+          toast("error", "Selecciona una temporada");
+          return;
+        }
+        if (discountType === "special_case" && discountReasonTrimmed.length < 8) {
+          toast("error", "Explica el caso especial con más detalle");
+          return;
+        }
+      }
+
+      const label =
+        selectedProduct?.name ||
+        (productQuery.trim() ? productQuery.trim() : productId.slice(0, 8));
+
+      itemsToSave.push({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        productId,
+        productLabel: label,
+        inputs: { cantidad, diseño: design },
+        applyIsv,
+        isvRate: effectiveIsvRate,
+        priceFinal: finalPrice,
+        suggestedPrice,
+        totalWithIsv,
+        isvAmount,
+        discount: discountRequested
+          ? {
+              type: discountType,
+              season: discountType === "seasonal" ? discountSeason : undefined,
+              reason: discountReasonTrimmed,
+              amount: Number(discountAmount),
+            }
+          : null,
+        breakdown: result?.breakdown ?? [],
+      });
+    }
+
+    if (itemsToSave.length === 0) {
+      toast("error", "No hay productos para guardar");
+      return;
+    }
+
     setIsSaving(true);
     try {
       let supervisorAuth: { supervisorEmail: string; supervisorPassword: string } | undefined;
-      if (meInfo?.role === "vendedor" && finalPrice < suggestedPrice) {
-        const creds = await promptSupervisorCredentials();
-        if (!creds) return;
-        supervisorAuth = creds;
+      if (meInfo?.role === "vendedor") {
+        const needsApproval = itemsToSave.some((it) => it.priceFinal < it.suggestedPrice);
+        if (needsApproval) {
+          const creds = await promptSupervisorCredentials();
+          if (!creds) return;
+          supervisorAuth = creds;
+        }
       }
 
-      const res = await apiFetch(`${API}/quotes`, {
+      const res = await apiFetch(`${API}/quote-groups`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          productId,
-          inputs: { cantidad, diseño: design },
-          applyIsv,
-          isvRate: 0.15,
-          priceFinal: finalPrice,
-          discount: discountRequested
-            ? {
-                type: discountType === "seasonal" ? "seasonal" : discountType,
-                season: discountType === "seasonal" ? discountSeason : undefined,
-                reason: discountReasonTrimmed,
-                amount: Number(discountAmount),
-              }
-            : undefined,
+          items: itemsToSave.map((item) => ({
+            productId: item.productId,
+            inputs: item.inputs,
+            applyIsv: item.applyIsv,
+            isvRate: item.isvRate,
+            priceFinal: item.priceFinal,
+            discount: item.discount
+              ? {
+                  type: item.discount.type === "seasonal" ? "seasonal" : item.discount.type,
+                  season: item.discount.type === "seasonal" ? item.discount.season : undefined,
+                  reason: item.discount.reason,
+                  amount: item.discount.amount,
+                }
+              : undefined,
+          })),
+          customerId: customerEnabled ? selectedCustomer?.id : undefined,
+          customer:
+            customerEnabled && !selectedCustomer
+              ? {
+                  name: newCustomer.name.trim(),
+                  rtn: newCustomer.rtn.trim() || undefined,
+                  phone: newCustomer.phone.trim() || undefined,
+                  email: newCustomer.email.trim() || undefined,
+                  address: newCustomer.address.trim() || undefined,
+                  notes: newCustomer.notes.trim() || undefined,
+                }
+              : undefined,
           supervisorEmail: supervisorAuth?.supervisorEmail,
           supervisorPassword: supervisorAuth?.supervisorPassword,
         }),
       });
 
       const data = (await res.json().catch(() => null)) as unknown;
-
       if (!res.ok) {
         const errMsg =
           typeof data === "object" && data !== null && "error" in data
             ? String((data as { error?: unknown }).error ?? "No se pudo guardar")
             : "No se pudo guardar";
-        console.error("save quote error:", res.status, data);
         toast("error", `Error ${res.status}: ${errMsg}`);
         return;
       }
 
-      const savedData = data as CreateQuoteResponse;
-      setSaved(savedData);
-      toast("success", `Cotización guardada: ${savedData.quoteId}`);
+      const savedGroupData = data as CreateQuoteGroupResponse;
+      setSavedGroup(savedGroupData);
+      setCartItems([]);
+      setSaved(null);
+      toast("success", "Cotización guardada");
     } catch (e) {
       console.error(e);
       toast("error", "Error de red");
@@ -609,12 +873,84 @@ export default function QuotePreviewPage() {
   const subtotalBeforeDiscount = suggestedPrice;
   const isvAmount = applyIsv ? finalPrice * effectiveIsvRate : 0;
   const totalWithIsv = finalPrice + isvAmount;
+
+  const moneyFmt = new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  const fmtMoney = (v: number) => `L ${moneyFmt.format(Number(v ?? 0))}`;
+  const fmtNum = (v: number) => moneyFmt.format(Number(v ?? 0));
   const priceBelowSuggested = Boolean(result) && finalPrice < suggestedPrice;
   const priceAboveAuto =
     Boolean(result) &&
     discountType !== "none" &&
     Number.isFinite(finalPrice) &&
     finalPrice > autoPriceWithDiscount + 0.01;
+  const discountPctInvalid =
+    discountType !== "none" && (!Number.isFinite(discountPct) || discountPct <= 0 || discountPct >= 100);
+  const discountReasonMissing = discountType !== "none" && discountReason.trim().length === 0;
+  const finalPriceInvalid = Boolean(result) && (!Number.isFinite(finalPrice) || finalPrice <= 0);
+  const canSave =
+    Boolean(productId.trim()) &&
+    Boolean(result) &&
+    !finalPriceInvalid &&
+    !discountPctInvalid &&
+    !discountReasonMissing &&
+    !isSaving;
+  const cartTotal = cartItems.reduce((acc, it) => acc + Number(it.totalWithIsv || 0), 0);
+  const cartSubtotal = cartItems.reduce((acc, it) => acc + Number(it.priceFinal || 0), 0);
+  const cartIsv = cartItems.reduce((acc, it) => acc + Number(it.isvAmount || 0), 0);
+  const hasCart = cartItems.length > 0;
+  const canSaveGroup = (hasCart || canSave) && !isSaving;
+  const cartNeedsApproval = hasCart
+    ? cartItems.some((it) => it.priceFinal < it.suggestedPrice)
+    : false;
+  const savedGroupTotals = savedGroup
+    ? {
+        subtotal: Number(savedGroup.group.price_final ?? 0),
+        isv: Number(savedGroup.group.isv_amount ?? 0),
+        total: Number(savedGroup.group.total ?? 0),
+      }
+    : null;
+  const displayTotal = hasCart
+    ? cartTotal
+    : savedGroupTotals
+    ? savedGroupTotals.total
+    : totalWithIsv;
+
+  const aggregatedBreakdown = useMemo(() => {
+    const lines: PreviewResponse["breakdown"] = [];
+    for (const item of cartItems) {
+      lines.push(...(item.breakdown ?? []));
+    }
+    if (result?.breakdown) lines.push(...result.breakdown);
+
+    const map = new Map<
+      string,
+      { supplyName: string; unitBase: string; qty: number; lineCost: number }
+    >();
+
+    for (const line of lines) {
+      const key = `${line.supplyName}__${line.unitBase}`;
+      const existing = map.get(key);
+      if (existing) {
+        existing.qty += Number(line.qty ?? 0);
+        existing.lineCost += Number(line.lineCost ?? 0);
+      } else {
+        map.set(key, {
+          supplyName: line.supplyName,
+          unitBase: line.unitBase,
+          qty: Number(line.qty ?? 0),
+          lineCost: Number(line.lineCost ?? 0),
+        });
+      }
+    }
+
+    return Array.from(map.values()).map((entry) => ({
+      ...entry,
+      costPerUnit: entry.qty > 0 ? entry.lineCost / entry.qty : 0,
+    }));
+  }, [cartItems, result]);
 
   return (
     <RequireAuth>
@@ -626,37 +962,14 @@ export default function QuotePreviewPage() {
             { label: "Inicio", href: "/" },
             { label: "Cotización" },
           ]}
-          headerRight={
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="rounded-full border border-[#334155] bg-[#1E293B] px-3 py-1 text-xs text-[#94A3B8]">
-                {meInfo ? (
-                  <>
-                    user:{" "}
-                    <span className="font-medium text-[#E2E8F0]">
-                      {meInfo.fullName ?? meInfo.userId}
-                    </span>{" "}
-                    — <span className="font-medium text-[#E2E8F0]">{meInfo.role}</span>
-                  </>
-                ) : (
-                  <>user: (sin /me)</>
-                )}
-              </div>
-              <Button variant="surface" size="sm" onClick={testMe}>
-                Probar /me
-              </Button>
-              <Button variant="primary" size="sm" onClick={logout}>
-                Cerrar sesión
-              </Button>
-            </div>
-          }
         >
           <div className="relative space-y-6">
             <div className="pointer-events-none absolute -top-20 right-6 h-64 w-64 rounded-full bg-[#38BDF8]/20 blur-3xl" />
             <div className="pointer-events-none absolute top-40 -left-16 h-72 w-72 rounded-full bg-[#22C55E]/15 blur-3xl" />
             <div className="pointer-events-none absolute bottom-10 right-1/3 h-72 w-72 rounded-full bg-[#1E293B]/60 blur-3xl" />
 
-            <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-              <Card className="relative z-10">
+            <section className="grid gap-6 lg:grid-cols-[1.7fr_0.9fr]">
+              <Card className="relative z-10 p-7">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <h2 className="text-lg font-semibold">Datos de la cotización</h2>
                   <Badge variant="info">ISV 15% configurable</Badge>
@@ -734,11 +1047,11 @@ export default function QuotePreviewPage() {
                       </div>
                     )}
 
-                    {!selectedProduct && productId && (
-                      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[#94A3B8]">
-                        <span>Usando ID: {productId}</span>
-                        <Button
-                          variant="secondary"
+                  {!selectedProduct && productId && (
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[#94A3B8]">
+                      <span>Usando ID: {productId}</span>
+                      <Button
+                        variant="secondary"
                           size="sm"
                           onClick={() => handleCopy("ID de producto", productId)}
                         >
@@ -748,16 +1061,176 @@ export default function QuotePreviewPage() {
                     )}
                   </div>
 
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <label className="text-xs uppercase tracking-[0.25em] text-[#94A3B8]">
+                        Cliente (opcional)
+                      </label>
+                      <div className="flex items-center gap-2 text-xs text-[#94A3B8]">
+                        <span>Asignar</span>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={customerEnabled}
+                          onClick={() => setCustomerEnabled((prev) => !prev)}
+                          className={`relative inline-flex h-6 w-11 items-center rounded-full transition ${
+                            customerEnabled ? "bg-[#22C55E]" : "bg-[#334155]"
+                          }`}
+                        >
+                          <span
+                            className={`inline-block h-5 w-5 transform rounded-full bg-[#0F172A] transition ${
+                              customerEnabled ? "translate-x-5" : "translate-x-1"
+                            }`}
+                          />
+                        </button>
+                      </div>
+                    </div>
+
+                    {customerEnabled && (
+                      <div className="relative">
+                        <Input
+                          ref={customerInputRef}
+                          placeholder="Busca por nombre o RTN"
+                          value={customerQuery}
+                          onChange={(e) => {
+                            setCustomerQuery(e.target.value);
+                            setShowCustomerSuggestions(true);
+                          }}
+                          onFocus={() => setShowCustomerSuggestions(true)}
+                          onBlur={handleCustomerBlur}
+                          role="combobox"
+                          aria-autocomplete="list"
+                          aria-expanded={showCustomerSuggestions && customerQuery.trim().length >= 2}
+                          aria-haspopup="listbox"
+                          aria-controls="customer-suggestions"
+                        />
+
+                        {showCustomerSuggestions && customerQuery.trim().length >= 2 && (
+                          <div
+                            id="customer-suggestions"
+                            role="listbox"
+                            className="absolute z-20 mt-2 w-full overflow-hidden rounded-xl border border-[#334155] bg-[#0F172A] shadow-[0_18px_40px_-28px_rgba(0,0,0,0.9)]"
+                          >
+                            {isSuggestingCustomer && (
+                              <div className="px-3 py-2 text-xs text-[#94A3B8]">Buscando...</div>
+                            )}
+                            {!isSuggestingCustomer && customerSuggestions.length === 0 && (
+                              <div className="px-3 py-2 text-xs text-[#94A3B8]">Sin resultados</div>
+                            )}
+                            {!isSuggestingCustomer &&
+                              customerSuggestions.map((item) => (
+                                <button
+                                  key={item.id}
+                                  type="button"
+                                  className="flex w-full flex-col gap-1 px-3 py-2 text-left text-sm text-[#E2E8F0] transition hover:bg-[#1E293B]"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => handleSelectCustomer(item)}
+                                >
+                                  <span className="font-semibold">
+                                    {item.name ? item.name : "Cliente sin nombre"}
+                                  </span>
+                                  <span className="text-xs text-[#94A3B8]">
+                                    {item.rtn ? `RTN: ${item.rtn}` : item.id}
+                                  </span>
+                                </button>
+                              ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {customerEnabled && selectedCustomer && (
+                      <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[#94A3B8]">
+                        <span>
+                          Seleccionado: {selectedCustomer.name ?? "Cliente"}{" "}
+                          {selectedCustomer.rtn ? `— RTN ${selectedCustomer.rtn}` : ""}
+                        </span>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => handleCopy("ID de cliente", selectedCustomer.id)}
+                        >
+                          Copiar ID
+                        </Button>
+                        <Button
+                          variant="surface"
+                          size="sm"
+                          onClick={() => {
+                            setSelectedCustomer(null);
+                            setCustomerQuery("");
+                          }}
+                        >
+                          Quitar
+                        </Button>
+                      </div>
+                    )}
+
+                    {customerEnabled && !selectedCustomer && (
+                      <div className="mt-3 rounded-xl border border-[#334155] bg-[#0F172A]/80 p-3">
+                        <div className="text-xs uppercase tracking-[0.2em] text-[#94A3B8]">
+                          Nuevo cliente
+                        </div>
+                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                          <Input
+                            placeholder="Nombre (requerido)"
+                            value={newCustomer.name}
+                            onChange={(e) =>
+                              setNewCustomer((prev) => ({ ...prev, name: e.target.value }))
+                            }
+                          />
+                          <Input
+                            placeholder="RTN"
+                            value={newCustomer.rtn}
+                            onChange={(e) =>
+                              setNewCustomer((prev) => ({ ...prev, rtn: e.target.value }))
+                            }
+                          />
+                          <Input
+                            placeholder="Teléfono"
+                            value={newCustomer.phone}
+                            onChange={(e) =>
+                              setNewCustomer((prev) => ({ ...prev, phone: e.target.value }))
+                            }
+                          />
+                          <Input
+                            placeholder="Correo"
+                            value={newCustomer.email}
+                            onChange={(e) =>
+                              setNewCustomer((prev) => ({ ...prev, email: e.target.value }))
+                            }
+                          />
+                          <Input
+                            placeholder="Dirección"
+                            value={newCustomer.address}
+                            onChange={(e) =>
+                              setNewCustomer((prev) => ({ ...prev, address: e.target.value }))
+                            }
+                          />
+                          <Input
+                            placeholder="Notas"
+                            value={newCustomer.notes}
+                            onChange={(e) =>
+                              setNewCustomer((prev) => ({ ...prev, notes: e.target.value }))
+                            }
+                          />
+                        </div>
+                        <div className="mt-2 text-xs text-[#64748B]">
+                          Si no existe, se creará automáticamente al guardar la cotización.
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
                   <div className="grid gap-4 sm:grid-cols-3">
-                    <div className="rounded-xl border border-[#334155] bg-[#0F172A]/80 p-3">
+                    <div className="rounded-xl border border-[#334155] bg-[#0F172A]/80 p-4">
                       <p className="text-xs text-[#94A3B8]">Cantidad</p>
                       <p className="text-lg font-semibold">{cantidad}</p>
                     </div>
-                    <div className="rounded-xl border border-[#334155] bg-[#0F172A]/80 p-3">
+                    <div className="rounded-xl border border-[#334155] bg-[#0F172A]/80 p-4">
                       <p className="text-xs text-[#94A3B8]">Diseño</p>
                       <p className="text-lg font-semibold capitalize">{design}</p>
                     </div>
-                    <div className="rounded-xl border border-[#334155] bg-[#0F172A]/80 p-3">
+                    <div className="rounded-xl border border-[#334155] bg-[#0F172A]/80 p-4">
                       <p className="text-xs text-[#94A3B8]">ISV</p>
                       <p className="text-lg font-semibold">{applyIsv ? "Sí" : "No"}</p>
                     </div>
@@ -815,7 +1288,7 @@ export default function QuotePreviewPage() {
                     </div>
                   </div>
 
-                  <div className="mt-8 grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
+                  <div className="mt-8 grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
                     <div className="rounded-xl border border-[#334155] bg-[#0F172A]/80 p-4">
                       <div className="flex items-center justify-between gap-2">
                         <div>
@@ -823,11 +1296,11 @@ export default function QuotePreviewPage() {
                             Precio sugerido
                           </p>
                           <p className="mt-1 text-lg font-semibold">
-                            {result ? `L ${suggestedPrice.toFixed(2)}` : "Calcula preview"}
+                            {result ? fmtMoney(suggestedPrice) : "Calcula preview"}
                           </p>
                           {discountType !== "none" && result && (
                             <div className="mt-1 space-y-1 text-xs text-[#94A3B8]">
-                              <div>Precio con descuento (auto): L {autoPriceWithDiscount.toFixed(2)}</div>
+                              <div>Precio con descuento (auto): {fmtMoney(autoPriceWithDiscount)}</div>
                               {priceAboveAuto && (
                                 <div className="font-semibold text-[#22C55E]">
                                   Precio final por encima del auto
@@ -844,7 +1317,7 @@ export default function QuotePreviewPage() {
                       </div>
 
                       <div className="mt-5 grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
-                        <div className="flex-1 min-w-55">
+                        <div className="flex-1 min-w-[220px]">
                           <label className="text-xs uppercase tracking-[0.25em] text-[#94A3B8]">
                             Precio final
                           </label>
@@ -859,6 +1332,9 @@ export default function QuotePreviewPage() {
                             }}
                             disabled={!result}
                           />
+                          {finalPriceInvalid && (
+                            <p className="mt-2 text-xs text-[#F97316]">Precio final inválido.</p>
+                          )}
                           <p className="mt-2 text-xs text-[#94A3B8]">
                             El cálculo automático está disponible; puedes ajustar para evitar pérdidas.
                           </p>
@@ -922,8 +1398,13 @@ export default function QuotePreviewPage() {
                               value={discountAmount}
                               onChange={(e) => setDiscountAmount(Number(e.target.value))}
                             />
+                            {discountPctInvalid && (
+                              <p className="text-xs text-[#F97316]">
+                                Ingresa un porcentaje válido (1–99.99).
+                              </p>
+                            )}
                             <div className="text-xs text-[#94A3B8]">
-                              Descuento estimado: L {effectiveDiscountAmount.toFixed(2)}
+                              Descuento estimado: {fmtMoney(effectiveDiscountAmount)}
                             </div>
                             <textarea
                               className="w-full rounded-xl border border-[#334155] bg-[#0F172A]/80 p-3 text-sm text-[#E2E8F0] shadow-sm transition placeholder:text-[#94A3B8] focus:border-[#38BDF8] focus:outline-none focus:ring-4 focus:ring-[#38BDF8]/20"
@@ -932,6 +1413,9 @@ export default function QuotePreviewPage() {
                               value={discountReason}
                               onChange={(e) => setDiscountReason(e.target.value)}
                             />
+                            {discountReasonMissing && (
+                              <p className="text-xs text-[#F97316]">La razón del descuento es obligatoria.</p>
+                            )}
                           </div>
                         )}
                       </div>
@@ -939,26 +1423,169 @@ export default function QuotePreviewPage() {
                   </div>
                 </div>
 
-                <div className="mt-6 flex flex-wrap gap-3">
-                  <Button variant="secondary" onClick={preview} disabled={!productId.trim() || isPreviewing}>
-                    {isPreviewing ? "Calculando..." : "Calcular preview"}
-                  </Button>
+                <div className="mt-6 space-y-3">
+                  <div className="rounded-2xl border border-[#334155] bg-[#0F172A]/80 p-4 text-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="text-[#94A3B8]">
+                        Productos agregados:{" "}
+                        <span className="font-semibold text-[#E2E8F0]">{cartItems.length}</span>
+                      </div>
+                      <div className="text-[#94A3B8]">
+                        Total cotización:{" "}
+                        <span className="font-semibold text-[#E2E8F0]">{fmtMoney(cartTotal)}</span>
+                      </div>
+                    </div>
+                    {result && (
+                      <div className="mt-2 text-xs text-[#64748B]">
+                        El producto actual no está agregado todavía.
+                      </div>
+                    )}
+                  </div>
 
-                  <Button variant="primary" onClick={saveQuote} disabled={!productId.trim() || isSaving}>
-                    {isSaving ? "Guardando..." : "Guardar cotización"}
-                  </Button>
+                  <div className="flex flex-wrap gap-3">
+                    <Button variant="surface" onClick={preview} disabled={!productId.trim() || isPreviewing}>
+                      {isPreviewing ? "Calculando..." : "Calcular preview"}
+                    </Button>
 
-                  <Button
-                    variant="secondary"
-                    onClick={openConvertConfirm}
-                    disabled={!saved?.quoteId || isConverting}
-                  >
-                    {isConverting ? "Convirtiendo..." : "Convertir a pedido"}
-                  </Button>
+                    <Button
+                      variant="secondary"
+                      onClick={addToCart}
+                      disabled={!productId.trim() || isPreviewing}
+                    >
+                      Agregar producto
+                    </Button>
+
+                    <Button
+                      variant="primary"
+                      onClick={saveGroup}
+                      disabled={!canSaveGroup}
+                    >
+                      {isSaving
+                        ? "Guardando..."
+                        : `Guardar cotización${cartItems.length > 0 ? ` (${cartItems.length})` : ""}`}
+                    </Button>
+
+                    <Button
+                      variant="secondary"
+                      onClick={openConvertConfirm}
+                      disabled={!saved?.quoteId || isConverting}
+                    >
+                      {isConverting ? "Convirtiendo..." : "Convertir a pedido"}
+                    </Button>
+                  </div>
                 </div>
               </Card>
 
-              <div className="space-y-4">
+              <div className="space-y-4 lg:sticky lg:top-6 h-fit">
+                {hasCart && (
+                  <Card className="p-5">
+                    <div className="flex items-center justify-between">
+                      <h2 className="text-base font-semibold">Productos en la cotización</h2>
+                      <Badge variant="info">{cartItems.length}</Badge>
+                    </div>
+                    <div className="mt-3 space-y-2">
+                      {cartItems.map((item) => (
+                        <div
+                          key={item.id}
+                          className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[#334155] bg-[#0F172A]/80 p-3 text-sm"
+                        >
+                          <div>
+                            <div className="font-semibold text-[#E2E8F0]">{item.productLabel}</div>
+                            <div className="text-xs text-[#94A3B8]">
+                              qty: {item.inputs.cantidad} — diseño: {item.inputs.diseño}
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold">{fmtMoney(item.totalWithIsv)}</span>
+                            <Button
+                              variant="surface"
+                              size="sm"
+                              onClick={() => removeCartItem(item.id)}
+                            >
+                              Quitar
+                            </Button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-3 flex items-center justify-between border-t border-[#334155] pt-3 text-sm">
+                      <span>Total conjunto</span>
+                      <span className="font-semibold">{fmtMoney(cartTotal)}</span>
+                    </div>
+                  </Card>
+                )}
+
+                <Card className="p-5">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-base font-semibold">Resumen rápido</h2>
+                    {(priceBelowSuggested || cartNeedsApproval) && (
+                      <Badge variant="info">Requiere autorización</Badge>
+                    )}
+                  </div>
+                  <div className="mt-3 grid gap-2 text-sm text-[#E2E8F0]">
+                    {hasCart ? (
+                      <>
+                        <div className="flex items-center justify-between">
+                          <span>Subtotal</span>
+                          <span>{fmtMoney(cartSubtotal)}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span>ISV</span>
+                          <span>{fmtMoney(cartIsv)}</span>
+                        </div>
+                        <div className="flex items-center justify-between border-t border-[#334155] pt-2 text-base font-semibold">
+                          <span>Total cotización</span>
+                          <span>{fmtMoney(cartTotal)}</span>
+                        </div>
+                        {result && (
+                          <div className="text-xs text-[#94A3B8]">
+                            El producto actual no está agregado todavía.
+                          </div>
+                        )}
+                      </>
+                    ) : savedGroupTotals ? (
+                      <>
+                        <div className="flex items-center justify-between">
+                          <span>Subtotal</span>
+                          <span>{fmtMoney(savedGroupTotals.subtotal)}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span>ISV</span>
+                          <span>{fmtMoney(savedGroupTotals.isv)}</span>
+                        </div>
+                        <div className="flex items-center justify-between border-t border-[#334155] pt-2 text-base font-semibold">
+                          <span>Total cotización</span>
+                          <span>{fmtMoney(savedGroupTotals.total)}</span>
+                        </div>
+                        <div className="text-xs text-[#94A3B8]">Cotización grupal guardada.</div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="flex items-center justify-between">
+                          <span>Precio sugerido</span>
+                          <span>{fmtMoney(suggestedPrice)}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span>Descuento</span>
+                          <span>{discountPct.toFixed(2)}%</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span>Precio final</span>
+                          <span className="font-semibold">{fmtMoney(finalPrice)}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span>ISV</span>
+                          <span>{fmtMoney(isvAmount)}</span>
+                        </div>
+                        <div className="flex items-center justify-between border-t border-[#334155] pt-2 text-base font-semibold">
+                          <span>Total</span>
+                          <span>{fmtMoney(totalWithIsv)}</span>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                </Card>
+
                 <Card className="p-5">
                   <h2 className="text-base font-semibold">Estado actual</h2>
                   <p className="mt-2 text-sm text-[#94A3B8]">
@@ -984,11 +1611,42 @@ export default function QuotePreviewPage() {
                           Copiar ID
                         </Button>
                       </div>
-                      <div>Subtotal: L {Number(saved.quote.price_final).toFixed(2)}</div>
-                      <div>ISV: L {Number(saved.quote.isv_amount).toFixed(2)}</div>
-                      <div className="text-base font-semibold">Total: L {Number(saved.quote.total).toFixed(2)}</div>
+                      <div>Subtotal: {fmtMoney(Number(saved.quote.price_final))}</div>
+                      <div>ISV: {fmtMoney(Number(saved.quote.isv_amount))}</div>
+                      <div className="text-base font-semibold">
+                        Total: {fmtMoney(Number(saved.quote.total))}
+                      </div>
                     </div>
                     <div className="mt-2 text-xs text-[#94A3B8]">Expira: {saved.quote.expires_at}</div>
+                  </Card>
+                )}
+
+                {savedGroup && (
+                  <Card className="p-5">
+                    <div className="flex items-center justify-between gap-2">
+                      <h2 className="text-base font-semibold">Cotización grupal guardada</h2>
+                      <Badge variant="neutral">{savedGroup.group.status}</Badge>
+                    </div>
+                    <div className="mt-3 space-y-2 text-sm text-[#E2E8F0]">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span>ID: {savedGroup.groupId}</span>
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => handleCopy("ID de cotización", savedGroup.groupId)}
+                        >
+                          Copiar ID
+                        </Button>
+                      </div>
+                      <div>Total: {fmtMoney(Number(savedGroup.group.total))}</div>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={() => router.push(`/quote-groups/${savedGroup.groupId}`)}
+                      >
+                        Ver hoja
+                      </Button>
+                    </div>
                   </Card>
                 )}
 
@@ -1008,70 +1666,293 @@ export default function QuotePreviewPage() {
               </div>
             </section>
 
-            {result && (
+            {(result || hasCart) && (
               <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
                 <Card className="p-6">
                   <div className="flex items-center justify-between">
                     <h2 className="text-lg font-semibold">Desglose</h2>
-                    <Badge variant="info">Preview</Badge>
-                  </div>
-                  <div className="mt-4 space-y-3">
-                    {result.breakdown.map((b, idx) => (
-                      <div
-                        key={idx}
-                        className="rounded-xl border border-[#334155] bg-[#0F172A]/80 p-3 text-sm text-[#E2E8F0]"
+                    <div className="flex items-center gap-2">
+                      <Badge variant={hasCart ? "neutral" : "info"}>
+                        {hasCart ? "Cotización" : "Preview"}
+                      </Badge>
+                      <Button
+                        variant="surface"
+                        size="sm"
+                        onClick={() => setShowAggregatedBreakdown((prev) => !prev)}
                       >
-                        <div className="text-base font-semibold text-[#E2E8F0]">{b.supplyName}</div>
-                        <div className="mt-1 text-sm text-[#94A3B8]">
-                          qty: {b.qty} {b.unitBase} — cpu: L {b.costPerUnit.toFixed(4)} — costo: L{" "}
-                          {b.lineCost.toFixed(4)}
+                        {showAggregatedBreakdown ? "Ver por producto" : "Ver total"}
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="mt-4 space-y-4">
+                    {showAggregatedBreakdown && (
+                      <div className="space-y-3">
+                        <div className="text-xs uppercase tracking-[0.2em] text-[#94A3B8]">
+                          Consumo total
                         </div>
-                        <div className="mt-1 text-xs text-[#38BDF8]">fórmula: {b.formula}</div>
+                        {aggregatedBreakdown.length === 0 ? (
+                          <div className="rounded-xl border border-[#334155] bg-[#0F172A]/80 p-3 text-sm text-[#94A3B8]">
+                            Sin insumos registrados.
+                          </div>
+                        ) : (
+                          aggregatedBreakdown.map((b: { supplyName: string; unitBase: string; qty: number; lineCost: number; costPerUnit: number }, idx: number) => (
+                            <div
+                              key={`agg-${idx}`}
+                              className="rounded-xl border border-[#334155] bg-[#0F172A]/80 p-3 text-sm text-[#E2E8F0]"
+                            >
+                              <div className="text-base font-semibold text-[#E2E8F0]">
+                                {b.supplyName}
+                              </div>
+                              <div className="mt-1 text-sm text-[#94A3B8]">
+                                qty: {fmtNum(b.qty)} {b.unitBase} — cpu: {fmtMoney(b.costPerUnit)} — costo:{" "}
+                                {fmtMoney(b.lineCost)}
+                              </div>
+                            </div>
+                          ))
+                        )}
                       </div>
-                    ))}
+                    )}
+
+                    {!showAggregatedBreakdown && (
+                      <>
+                        {hasCart &&
+                          cartItems.map((item) => (
+                            <div key={item.id} className="space-y-2">
+                              <div className="text-xs uppercase tracking-[0.2em] text-[#94A3B8]">
+                                {item.productLabel} — qty {item.inputs.cantidad}
+                              </div>
+                              {item.breakdown.length === 0 ? (
+                                <div className="rounded-xl border border-[#334155] bg-[#0F172A]/80 p-3 text-sm text-[#94A3B8]">
+                                  Sin insumos registrados.
+                                </div>
+                              ) : (
+                                item.breakdown.map((b, idx) => (
+                                  <div
+                                    key={`${item.id}-${idx}`}
+                                    className="rounded-xl border border-[#334155] bg-[#0F172A]/80 p-3 text-sm text-[#E2E8F0]"
+                                  >
+                                    <div className="text-base font-semibold text-[#E2E8F0]">
+                                      {b.supplyName}
+                                    </div>
+                                    <div className="mt-1 text-sm text-[#94A3B8]">
+                                      qty: {fmtNum(b.qty)} {b.unitBase} — cpu:{" "}
+                                      {fmtMoney(b.costPerUnit)} — costo: {fmtMoney(b.lineCost)}
+                                    </div>
+                                    <div className="mt-1 text-xs text-[#38BDF8]">
+                                      fórmula: {b.formula}
+                                    </div>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          ))}
+
+                        {!hasCart && result && (
+                          <div className="space-y-3">
+                            {result.breakdown.map((b, idx) => (
+                              <div
+                                key={idx}
+                                className="rounded-xl border border-[#334155] bg-[#0F172A]/80 p-3 text-sm text-[#E2E8F0]"
+                              >
+                                <div className="text-base font-semibold text-[#E2E8F0]">
+                                  {b.supplyName}
+                                </div>
+                                <div className="mt-1 text-sm text-[#94A3B8]">
+                                  qty: {fmtNum(b.qty)} {b.unitBase} — cpu:{" "}
+                                  {fmtMoney(b.costPerUnit)} — costo: {fmtMoney(b.lineCost)}
+                                </div>
+                                <div className="mt-1 text-xs text-[#38BDF8]">fórmula: {b.formula}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {result && hasCart && (
+                          <div className="space-y-2">
+                            <div className="text-xs uppercase tracking-[0.2em] text-[#94A3B8]">
+                              Producto actual (sin agregar)
+                            </div>
+                            {result.breakdown.map((b, idx) => (
+                              <div
+                                key={`current-${idx}`}
+                                className="rounded-xl border border-[#334155] bg-[#0F172A]/80 p-3 text-sm text-[#E2E8F0]"
+                              >
+                                <div className="text-base font-semibold text-[#E2E8F0]">
+                                  {b.supplyName}
+                                </div>
+                                <div className="mt-1 text-sm text-[#94A3B8]">
+                                  qty: {fmtNum(b.qty)} {b.unitBase} — cpu:{" "}
+                                  {fmtMoney(b.costPerUnit)} — costo: {fmtMoney(b.lineCost)}
+                                </div>
+                                <div className="mt-1 text-xs text-[#38BDF8]">fórmula: {b.formula}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    )}
                   </div>
                 </Card>
 
-                <Card className="p-6">
+                <Card className="p-6 border-[#38BDF8]/40 bg-gradient-to-b from-[#0F172A]/80 to-[#0B1220]">
                   <div className="flex items-center justify-between">
                     <h2 className="text-lg font-semibold">Totales</h2>
                     <Badge variant="neutral">Resumen</Badge>
                   </div>
 
-                  <div className="mt-4 rounded-xl border border-[#334155] bg-[#0F172A]/80 p-4">
-                    <p className="text-xs text-[#94A3B8]">Total estimado</p>
+                  <div className="mt-4 rounded-xl border border-[#334155] bg-[#0B1220] p-4">
+                    <p className="text-xs uppercase tracking-[0.2em] text-[#94A3B8]">
+                      {hasCart || savedGroupTotals ? "Total cotización" : "Total estimado"}
+                    </p>
                     <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
-                      <div className="text-2xl font-semibold">L {totalWithIsv.toFixed(4)}</div>
+                      <div className="text-3xl font-semibold text-[#E2E8F0]">
+                        {fmtMoney(displayTotal)}
+                      </div>
                       <Button
                         variant="secondary"
                         size="sm"
-                        onClick={() => handleCopy("Total", totalWithIsv.toFixed(4))}
+                        onClick={() =>
+                          handleCopy("Total", fmtNum(displayTotal))
+                        }
                       >
                         Copiar total
                       </Button>
                     </div>
                   </div>
 
-                  <div className="mt-4 grid gap-2 text-sm text-[#E2E8F0] sm:grid-cols-2">
-                    <div>Materiales: L {result.totals.materialsCost.toFixed(4)}</div>
-                    <div>Merma: L {result.totals.wasteCost.toFixed(4)}</div>
-                    <div>Operativo: L {result.totals.operationalCost.toFixed(4)}</div>
-                    <div>Diseño: L {result.totals.designCost.toFixed(2)}</div>
-                    <div className="sm:col-span-2 my-2 border-t border-[#334155]" />
-                    <div className="sm:col-span-2 text-base font-semibold">
-                      Costo total: L {result.totals.costTotal.toFixed(4)}
+                  {hasCart ? (
+                    <div className="mt-4 space-y-3 text-sm text-[#E2E8F0]">
+                      <div className="rounded-xl border border-[#334155] bg-[#0F172A]/80 p-4">
+                        <div className="text-xs uppercase tracking-[0.2em] text-[#94A3B8]">
+                          Resumen grupal
+                        </div>
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                          <div className="flex items-center justify-between">
+                            <span>Subtotal</span>
+                            <span className="font-semibold">{fmtMoney(cartSubtotal)}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span>ISV</span>
+                            <span className="font-semibold">{fmtMoney(cartIsv)}</span>
+                          </div>
+                          <div className="sm:col-span-2 flex items-center justify-between border-t border-[#334155] pt-2 text-base font-semibold">
+                            <span>Total cotización</span>
+                            <span>{fmtMoney(cartTotal)}</span>
+                          </div>
+                        </div>
+                      </div>
+                      {result && (
+                        <div className="text-xs text-[#94A3B8]">
+                          Nota: el producto actual no está agregado todavía.
+                        </div>
+                      )}
                     </div>
-                    <div>Precio mínimo: L {result.totals.minPrice.toFixed(4)}</div>
-                    <div>Precio sugerido: L {result.totals.suggestedPrice.toFixed(4)}</div>
-                    <div>Utilidad: L {result.totals.profit.toFixed(4)}</div>
-                    <div>Margen real: {(result.totals.marginReal * 100).toFixed(2)}%</div>
-                    <div className="sm:col-span-2 my-2 border-t border-[#334155]" />
-                    <div>Subtotal: L {subtotalBeforeDiscount.toFixed(4)}</div>
-                    <div>Descuento ({discountPct.toFixed(2)}%): L {effectiveDiscountAmount.toFixed(4)}</div>
-                    <div>Subtotal con descuento: L {finalPrice.toFixed(4)}</div>
-                    <div>ISV: L {isvAmount.toFixed(4)}</div>
-                    <div className="text-base font-semibold">Total: L {totalWithIsv.toFixed(4)}</div>
-                  </div>
+                  ) : savedGroupTotals ? (
+                    <div className="mt-4 space-y-3 text-sm text-[#E2E8F0]">
+                      <div className="rounded-xl border border-[#334155] bg-[#0F172A]/80 p-4">
+                        <div className="text-xs uppercase tracking-[0.2em] text-[#94A3B8]">
+                          Resumen grupal
+                        </div>
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                          <div className="flex items-center justify-between">
+                            <span>Subtotal</span>
+                            <span className="font-semibold">{fmtMoney(savedGroupTotals.subtotal)}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span>ISV</span>
+                            <span className="font-semibold">{fmtMoney(savedGroupTotals.isv)}</span>
+                          </div>
+                          <div className="sm:col-span-2 flex items-center justify-between border-t border-[#334155] pt-2 text-base font-semibold">
+                            <span>Total cotización</span>
+                            <span>{fmtMoney(savedGroupTotals.total)}</span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="text-xs text-[#94A3B8]">Cotización grupal guardada.</div>
+                    </div>
+                  ) : result ? (
+                    <div className="mt-4 space-y-3 text-sm text-[#E2E8F0]">
+                      <div className="rounded-xl border border-[#334155] bg-[#0F172A]/80 p-4">
+                        <div className="text-xs uppercase tracking-[0.2em] text-[#94A3B8]">
+                          Costos
+                        </div>
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                          <div className="flex items-center justify-between">
+                            <span>Materiales</span>
+                            <span>{fmtMoney(result.totals.materialsCost)}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span>Merma</span>
+                            <span>{fmtMoney(result.totals.wasteCost)}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span>Operativo</span>
+                            <span>{fmtMoney(result.totals.operationalCost)}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span>Diseño</span>
+                            <span>{fmtMoney(result.totals.designCost)}</span>
+                          </div>
+                          <div className="sm:col-span-2 flex items-center justify-between border-t border-[#334155] pt-2 text-base font-semibold">
+                            <span>Costo total</span>
+                            <span>{fmtMoney(result.totals.costTotal)}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-[#334155] bg-[#0F172A]/80 p-4">
+                        <div className="text-xs uppercase tracking-[0.2em] text-[#94A3B8]">
+                          Precio
+                        </div>
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                          <div className="flex items-center justify-between">
+                            <span>Precio mínimo</span>
+                            <span>{fmtMoney(result.totals.minPrice)}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span>Precio sugerido</span>
+                            <span>{fmtMoney(result.totals.suggestedPrice)}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span>Utilidad</span>
+                            <span>{fmtMoney(result.totals.profit)}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span>Margen real</span>
+                            <span>{(result.totals.marginReal * 100).toFixed(2)}%</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="rounded-xl border border-[#334155] bg-[#0F172A]/80 p-4">
+                        <div className="text-xs uppercase tracking-[0.2em] text-[#94A3B8]">
+                          Impuestos y total
+                        </div>
+                        <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                          <div className="flex items-center justify-between">
+                            <span>Subtotal</span>
+                            <span>{fmtMoney(subtotalBeforeDiscount)}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span>Descuento ({discountPct.toFixed(2)}%)</span>
+                            <span>{fmtMoney(effectiveDiscountAmount)}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span>Subtotal con descuento</span>
+                            <span>{fmtMoney(finalPrice)}</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span>ISV</span>
+                            <span>{fmtMoney(isvAmount)}</span>
+                          </div>
+                          <div className="sm:col-span-2 flex items-center justify-between border-t border-[#334155] pt-2 text-base font-semibold">
+                            <span>Total</span>
+                            <span>{fmtMoney(totalWithIsv)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
                 </Card>
               </section>
             )}

@@ -1,8 +1,8 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { createAuthClient, supabaseAdmin } from "../../lib/supabase.js";
 import { requireRole } from "../../plugins/roles.js";
+import { computeQuote, UUID_RE } from "./quote.calculator.js";
 
-type DesignLevel = "cliente" | "simple" | "medio" | "pro";
 type DiscountType = "seasonal" | "delay" | "senior" | "special_case";
 type DiscountSeason =
   | "navidad"
@@ -14,19 +14,21 @@ type DiscountSeason =
   | "otro";
 type Role = "admin" | "supervisor" | "vendedor";
 
-const DESIGN_COST: Record<DesignLevel, number> = {
-  cliente: 0,
-  simple: 300,
-  medio: 500,
-  pro: 700,
-};
-
 type CreateQuoteBody = {
   productId: string;
   inputs: Record<string, unknown>;
   applyIsv?: boolean;
   isvRate?: number;
   priceFinal?: number;
+  customerId?: string;
+  customer?: {
+    name?: string;
+    rtn?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    address?: string | null;
+    notes?: string | null;
+  };
   discount?: {
     type?: DiscountType;
     season?: DiscountSeason;
@@ -36,8 +38,6 @@ type CreateQuoteBody = {
   supervisorEmail?: string;
   supervisorPassword?: string;
 };
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function quotesRoutes(app: FastifyInstance) {
   /**
@@ -52,6 +52,8 @@ export async function quotesRoutes(app: FastifyInstance) {
       mine: string;
       status: string;
       limit: string;
+      page: string;
+      offset: string;
     }>;
 
     const role = req.auth!.role as Role;
@@ -59,6 +61,12 @@ export async function quotesRoutes(app: FastifyInstance) {
     const status = q.status?.trim();
     const limitRaw = Number(q.limit);
     const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 50) : 10;
+    const pageRaw = Number(q.page);
+    const page = Number.isFinite(pageRaw) && pageRaw > 0 ? Math.floor(pageRaw) : 0;
+    const offsetRaw = Number(q.offset);
+    const offset = Number.isFinite(offsetRaw) && offsetRaw >= 0 ? Math.floor(offsetRaw) : 0;
+    const start = page > 0 ? (page - 1) * limit : offset;
+    const end = start + limit - 1;
 
     // vendedor solo ve las suyas (ignora mine)
     if (role === "vendedor") mine = true;
@@ -69,7 +77,7 @@ export async function quotesRoutes(app: FastifyInstance) {
         "id, created_at, created_by, product_id, status, inputs, price_final, isv_amount, total, expires_at"
       )
       .order("created_at", { ascending: false })
-      .limit(limit);
+      .range(start, end);
 
     if (mine) {
       query = query.eq("created_by", req.auth!.userId);
@@ -101,7 +109,7 @@ export async function quotesRoutes(app: FastifyInstance) {
     const { data: quote, error: qErr } = await supabaseAdmin
       .from("quotes")
       .select(
-        "id, created_at, created_by, product_id, status, inputs, apply_isv, isv_rate, waste_pct, margin_pct, operational_pct, materials_cost, waste_cost, operational_cost, design_cost, cost_total, min_price, suggested_price, price_final, isv_amount, total, expires_at"
+        "id, created_at, created_by, product_id, customer_id, status, inputs, apply_isv, isv_rate, waste_pct, margin_pct, operational_pct, materials_cost, waste_cost, operational_cost, design_cost, cost_total, min_price, suggested_price, price_final, isv_amount, total, expires_at"
       )
       .eq("id", id)
       .maybeSingle();
@@ -129,10 +137,22 @@ export async function quotesRoutes(app: FastifyInstance) {
 
     if (pErr) return reply.code(500).send({ error: String(pErr) });
 
+    let customer: any = null;
+    if (quote.customer_id) {
+      const { data: cust, error: cErr } = await supabaseAdmin
+        .from("customers")
+        .select("id, name, rtn, phone, email, address, notes, created_at")
+        .eq("id", quote.customer_id)
+        .maybeSingle();
+      if (cErr) return reply.code(500).send({ error: String(cErr) });
+      customer = cust ?? null;
+    }
+
     return reply.send({
       quote,
       lines: Array.isArray(lines) ? lines : [],
       product: product ?? null,
+      customer,
     });
   });
 
@@ -151,137 +171,76 @@ export async function quotesRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: "productId inválido" });
     }
 
+    const customerId = body.customerId;
+    let resolvedCustomerId: string | null = null;
+    const cleanText = (value: unknown) =>
+      typeof value === "string" && value.trim().length ? value.trim() : null;
+
+    if (customerId !== undefined) {
+      if (!customerId || !UUID_RE.test(customerId)) {
+        return reply.code(400).send({ error: "customerId inválido" });
+      }
+      const { data: cust, error: cErr } = await supabaseAdmin
+        .from("customers")
+        .select("id")
+        .eq("id", customerId)
+        .maybeSingle();
+      if (cErr) return reply.code(500).send({ error: String(cErr) });
+      if (!cust) return reply.code(404).send({ error: "Cliente no encontrado" });
+      resolvedCustomerId = customerId;
+    } else if (body.customer) {
+      const name = cleanText(body.customer.name);
+      if (!name) return reply.code(400).send({ error: "nombre de cliente requerido" });
+      const payload = {
+        name,
+        rtn: cleanText(body.customer.rtn),
+        phone: cleanText(body.customer.phone),
+        email: cleanText(body.customer.email),
+        address: cleanText(body.customer.address),
+        notes: cleanText(body.customer.notes),
+      };
+      const { data: cust, error: cErr } = await supabaseAdmin
+        .from("customers")
+        .insert(payload)
+        .select("id")
+        .single();
+      if (cErr) return reply.code(500).send({ error: String(cErr) });
+      resolvedCustomerId = cust?.id ?? null;
+    }
+
     req.log.info(
       { userId: req.auth?.userId, role: req.auth?.role, productId: body.productId },
       "quotes.create request"
     );
 
-    const inputs = (body.inputs ?? {}) as Record<string, unknown>;
-    const cantidad = Number(inputs["cantidad"]);
-    if (!Number.isFinite(cantidad) || cantidad <= 0) {
-      return reply.code(400).send({ error: "inputs.cantidad inválido" });
-    }
-
-    const diseñoRaw = inputs["diseño"] ?? "cliente";
-    const diseño = String(diseñoRaw) as DesignLevel;
-    if (!["cliente", "simple", "medio", "pro"].includes(diseño)) {
-      return reply.code(400).send({ error: "inputs.diseño inválido" });
-    }
-
     const applyIsv = Boolean(body.applyIsv);
     const isvRate = Number.isFinite(body.isvRate as number) ? Number(body.isvRate) : 0.15;
-
-    // 0) Validar producto
-    const { data: product, error: pErr } = await supabaseAdmin
-      .from("products")
-      .select("id")
-      .eq("id", body.productId)
-      .maybeSingle();
-
-    if (pErr) return reply.code(500).send({ error: String(pErr) });
-    if (!product) return reply.code(404).send({ error: "Producto no encontrado" });
-
-    // 1) Plantilla activa del producto
-    const { data: tpl, error: tErr } = await supabaseAdmin
-      .from("product_templates")
-      .select("id, waste_pct, margin_pct, operational_pct")
-      .eq("product_id", body.productId)
-      .eq("is_active", true)
-      .order("version", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (tErr) return reply.code(500).send({ error: String(tErr) });
-    if (!tpl) return reply.code(404).send({ error: "Plantilla activa no encontrada" });
-
-    // 2) Items de receta
-    const { data: items, error: iErr } = await supabaseAdmin
-      .from("template_items")
-      .select("id, qty_formula, supply_id")
-      .eq("template_id", tpl.id);
-
-    if (iErr) return reply.code(500).send({ error: String(iErr) });
-
-    const supplyIds = (items ?? [])
-      .map((it) => (it as unknown as { supply_id?: string }).supply_id)
-      .filter((x): x is string => Boolean(x));
-
-    const { data: supplies, error: sErr } = supplyIds.length
-      ? await supabaseAdmin
-          .from("supplies")
-          .select("id, name, unit_base, cost_per_unit, stock")
-          .in("id", supplyIds)
-      : { data: [], error: null };
-
-    if (sErr) return reply.code(500).send({ error: String(sErr) });
-
-    const supplyById = new Map((supplies ?? []).map((s) => [s.id, s]));
-
-    // 3) Evaluador mínimo de fórmula
-    const ceil = Math.ceil;
-    function evalQty(formula: string): number {
-      if (!/^[0-9+\-*/().\s_a-zA-Z]+$/.test(formula)) {
-        throw new Error(`Fórmula inválida: ${formula}`);
-      }
-      const expr = formula.replaceAll("cantidad", String(cantidad));
-      // eslint-disable-next-line no-new-func
-      const fn = new Function("ceil", `return (${expr});`);
-      const val = Number(fn(ceil));
-      if (!Number.isFinite(val) || val < 0) throw new Error(`Resultado inválido: ${formula}`);
-      return val;
-    }
-
-    // 4) Construir breakdown + costos (snapshot)
-    const breakdown: Array<{
-      supply_id: string;
-      supply_name: string;
-      unit_base: string;
-      qty: number;
-      cost_per_unit: number;
-      line_cost: number;
-      qty_formula: string;
-    }> = [];
-
-    let materialsCost = 0;
-
-    for (const it of items ?? []) {
-      const supplyId = (it as unknown as { supply_id?: string }).supply_id;
-      if (!supplyId) continue;
-
-      const s = supplyById.get(supplyId);
-      if (!s) continue;
-
-      const formula = String((it as any).qty_formula ?? "0");
-      const qty = evalQty(formula);
-      const cpu = Number((s as any).cost_per_unit ?? 0);
-      const lineCost = qty * cpu;
-
-      breakdown.push({
-        supply_id: supplyId,
-        supply_name: String((s as any).name),
-        unit_base: String((s as any).unit_base),
-        qty,
-        cost_per_unit: cpu,
-        line_cost: lineCost,
-        qty_formula: formula,
+    let computed;
+    try {
+      computed = await computeQuote({
+        productId: body.productId,
+        inputs: (body.inputs ?? {}) as Record<string, unknown>,
+        applyIsv,
+        isvRate,
       });
-
-      materialsCost += lineCost;
+    } catch (e: any) {
+      const msg = String(e?.message ?? e ?? "Error");
+      if (msg.includes("no encontrado")) return reply.code(404).send({ error: msg });
+      if (msg.includes("inválido")) return reply.code(400).send({ error: msg });
+      return reply.code(500).send({ error: msg });
     }
 
-    const wastePct = Number(tpl.waste_pct ?? 0.05);
-    const marginPct = Number(tpl.margin_pct ?? 0.4);
-    const operationalPct = Number(tpl.operational_pct ?? 0);
-
-    const wasteCost = materialsCost * wastePct;
-    const materialsPlusWaste = materialsCost + wasteCost;
-    const operationalCost = materialsPlusWaste * operationalPct;
-
-    const designCost = DESIGN_COST[diseño];
-    const costTotal = materialsPlusWaste + operationalCost + designCost;
-
-    const minPrice = marginPct >= 1 ? costTotal : costTotal / (1 - marginPct);
-    const suggestedPrice = minPrice;
+    const { breakdown } = computed;
+    const {
+      materialsCost,
+      wasteCost,
+      operationalCost,
+      designCost,
+      costTotal,
+      minPrice,
+      suggestedPrice,
+    } = computed.totals;
+    const { wastePct, marginPct, operationalPct } = computed.template;
 
     const requestedPriceRaw = Number(body.priceFinal);
     if (body.priceFinal !== undefined && (!Number.isFinite(requestedPriceRaw) || requestedPriceRaw <= 0)) {
@@ -326,6 +285,9 @@ export async function quotesRoutes(app: FastifyInstance) {
       }
     }
 
+    let approvedBy: string | null = null;
+    let approvedReason: string | null = null;
+
     if (req.auth?.role === "vendedor" && priceFinal < suggestedPrice) {
       if (!body.supervisorEmail || !body.supervisorPassword) {
         return reply.code(400).send({
@@ -357,6 +319,9 @@ export async function quotesRoutes(app: FastifyInstance) {
       if (profile.role !== "admin" && profile.role !== "supervisor") {
         return reply.code(403).send({ error: "No autorizado: requiere admin/supervisor" });
       }
+
+      approvedBy = supervisorId;
+      approvedReason = "Precio final menor al sugerido";
     }
 
     const isvAmount = applyIsv ? priceFinal * isvRate : 0;
@@ -372,11 +337,11 @@ export async function quotesRoutes(app: FastifyInstance) {
         created_by: createdBy,
 
         product_id: body.productId,
-        template_id: tpl.id,
+        customer_id: resolvedCustomerId,
+        template_id: computed.template.id,
         status: "draft",
-      inputs: {
-          cantidad,
-          diseño,
+        inputs: {
+          ...computed.inputs,
           descuento: discountRequested
             ? {
                 tipo: discountType,
@@ -405,6 +370,14 @@ export async function quotesRoutes(app: FastifyInstance) {
         price_final: priceFinal,
         isv_amount: isvAmount,
         total,
+
+        discount_pct: discountRequested ? discountPct : null,
+        discount_type: discountRequested ? discountType ?? null : null,
+        discount_reason: discountRequested ? discountReason : null,
+        discount_season: discountRequested ? discountSeason ?? null : null,
+        approved_by: approvedBy,
+        approved_at: approvedBy ? new Date().toISOString() : null,
+        approved_reason: approvedReason,
       })
       .select("*")
       .single();

@@ -7,6 +7,10 @@ function isUnitBase(v: unknown): v is UnitBase {
   return v === "u" || v === "hoja" || v === "ml" || v === "m" || v === "m2";
 }
 
+function isRounding(v: unknown): v is "none" | "ceil" {
+  return v === "none" || v === "ceil";
+}
+
 export async function suppliesRoutes(app: FastifyInstance) {
   // ✅ VER: cualquiera logueado
   app.get("/supplies", async (req: FastifyRequest, reply) => {
@@ -21,6 +25,29 @@ export async function suppliesRoutes(app: FastifyInstance) {
     return reply.send(data ?? []);
   });
 
+  // ✅ Fórmula por defecto (tomada de template_items existentes)
+  app.get("/supplies/:id/default-formula", async (req: FastifyRequest, reply) => {
+    await app.requireAuth(req);
+    requireRole(req, ["admin", "supervisor", "vendedor"]);
+
+    const params = req.params as { id?: string };
+    const supplyId = params.id;
+
+    if (!supplyId) return reply.code(400).send({ error: "supply id requerido" });
+
+    const { data, error } = await supabaseAdmin
+      .from("template_items")
+      .select("qty_formula")
+      .eq("supply_id", supplyId)
+      .limit(1)
+      .maybeSingle();
+
+    if (error) return reply.code(500).send({ error: error.message });
+
+    const qtyFormula = data?.qty_formula ? String(data.qty_formula) : "cantidad";
+    return reply.send({ qtyFormula });
+  });
+
   // 🔒 CREAR: solo admin/supervisor
   app.post("/supplies", async (req: FastifyRequest, reply) => {
     await app.requireAuth(req);
@@ -33,6 +60,8 @@ export async function suppliesRoutes(app: FastifyInstance) {
       unitBase: UnitBase;
       costPerUnit: number;
       stock: number;
+      defaultConsumption: number;
+      defaultRounding: "none" | "ceil";
     }>;
 
     if (!body.name || typeof body.name !== "string") {
@@ -47,15 +76,30 @@ export async function suppliesRoutes(app: FastifyInstance) {
     if (typeof body.stock !== "number" || body.stock < 0) {
       return reply.code(400).send({ error: "stock inválido" });
     }
+    if (body.defaultConsumption !== undefined) {
+      if (typeof body.defaultConsumption !== "number" || body.defaultConsumption <= 0) {
+        return reply.code(400).send({ error: "defaultConsumption inválido" });
+      }
+    }
+    if (body.defaultRounding !== undefined && !isRounding(body.defaultRounding)) {
+      return reply.code(400).send({ error: "defaultRounding inválido" });
+    }
+
+    const insertRow: Record<string, unknown> = {
+      name: body.name.trim(),
+      unit_base: body.unitBase,
+      cost_per_unit: body.costPerUnit,
+      stock: body.stock,
+    };
+
+    if (body.defaultConsumption !== undefined) {
+      insertRow.default_consumption = body.defaultConsumption;
+      insertRow.default_rounding = body.defaultRounding ?? "none";
+    }
 
     const { data, error } = await supabaseAdmin
       .from("supplies")
-      .insert({
-        name: body.name.trim(),
-        unit_base: body.unitBase,
-        cost_per_unit: body.costPerUnit,
-        stock: body.stock,
-      })
+      .insert(insertRow)
       .select("*")
       .single();
 

@@ -19,8 +19,35 @@ export async function ordersConvertRoutes(app: FastifyInstance) {
       "quotes.convert request"
     );
 
-    // 🔒 Gate: si es vendedor, pedir credenciales de supervisor
-    if (role === "vendedor") {
+    const params = req.params as { id?: string };
+    const quoteId = params.id;
+
+    if (!quoteId) return reply.code(400).send({ error: "quote id requerido" });
+
+    // 1) Leer quote
+    const { data: quote, error: qErr } = await supabaseAdmin
+      .from("quotes")
+      .select("id, status, expires_at")
+      .eq("id", quoteId)
+      .single();
+
+    if (qErr) return reply.code(404).send({ error: "Cotización no encontrada" });
+
+    const expiresAt = new Date(String((quote as any).expires_at));
+    if (expiresAt.getTime() < Date.now()) {
+      // marcar expired
+      await supabaseAdmin.from("quotes").update({ status: "expired" }).eq("id", quoteId);
+      return reply.code(400).send({ error: "Cotización expirada" });
+    }
+
+    if ((quote as any).status !== "draft" && (quote as any).status !== "approved") {
+      return reply
+        .code(400)
+        .send({ error: `No se puede convertir en estado ${(quote as any).status}` });
+    }
+
+    // 🔒 Gate: si es vendedor, pedir credenciales de supervisor solo si NO está aprobada
+    if (role === "vendedor" && (quote as any).status !== "approved") {
       const body = (req.body ?? {}) as ConvertBody;
 
       if (!body.supervisorEmail || !body.supervisorPassword) {
@@ -56,35 +83,6 @@ export async function ordersConvertRoutes(app: FastifyInstance) {
       if (profile.role !== "admin" && profile.role !== "supervisor") {
         return reply.code(403).send({ error: "No autorizado: requiere admin/supervisor" });
       }
-    }
-
-    // ✅ TU LÓGICA EXISTENTE (igualita, solo la dejé abajo)
-
-    const params = req.params as { id?: string };
-    const quoteId = params.id;
-
-    if (!quoteId) return reply.code(400).send({ error: "quote id requerido" });
-
-    // 1) Leer quote
-    const { data: quote, error: qErr } = await supabaseAdmin
-      .from("quotes")
-      .select("id, status, expires_at")
-      .eq("id", quoteId)
-      .single();
-
-    if (qErr) return reply.code(404).send({ error: "Cotización no encontrada" });
-
-    const expiresAt = new Date(String((quote as any).expires_at));
-    if (expiresAt.getTime() < Date.now()) {
-      // marcar expired
-      await supabaseAdmin.from("quotes").update({ status: "expired" }).eq("id", quoteId);
-      return reply.code(400).send({ error: "Cotización expirada" });
-    }
-
-    if ((quote as any).status !== "draft" && (quote as any).status !== "approved") {
-      return reply
-        .code(400)
-        .send({ error: `No se puede convertir en estado ${(quote as any).status}` });
     }
 
     // 2) Leer líneas
