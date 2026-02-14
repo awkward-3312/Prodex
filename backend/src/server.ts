@@ -11,6 +11,7 @@ import { quotesRoutes } from "./modules/quotes/quotes.routes.js";
 import { ordersConvertRoutes } from "./modules/orders/orders.convert.routes.js";
 import authPlugin from "./plugins/auth.js";
 import authMeRoutes from "./modules/auth/auth.me.routes.js";
+import { productsRoutes } from "./modules/products/products.routes.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,18 +20,20 @@ dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
 const app = Fastify({ logger: true });
 
+const allowedOrigins =
+  process.env.CORS_ORIGINS?.split(",").map((o) => o.trim()).filter(Boolean) ?? [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://192.168.39.186:3000",
+  ];
+
 await app.register(cors, {
   origin: (origin, cb) => {
-    const allowed = [
-      "http://localhost:3000",
-      "http://127.0.0.1:3000",
-      "http://192.168.39.186:3000",
-    ];
 
     // permite requests sin origin (curl/postman)
     if (!origin) return cb(null, true);
 
-    if (allowed.includes(origin)) return cb(null, true);
+    if (allowedOrigins.includes(origin)) return cb(null, true);
     return cb(new Error("Not allowed by CORS"), false);
   },
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -47,6 +50,7 @@ await app.register(quotesPreviewRoutes);
 await app.register(quotesRoutes);
 await app.register(ordersConvertRoutes);
 await app.register(authMeRoutes);
+await app.register(productsRoutes);
 
 app.listen({ port: 4000, host: "0.0.0.0" }).catch((err) => {
   app.log.error(err);

@@ -1,8 +1,12 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { supabaseAdmin } from "../../lib/supabase.js";
+import { requireRole } from "../../plugins/roles.js";
 
 export async function suppliesPurchasesRoutes(app: FastifyInstance) {
-  app.post("/supplies/:id/purchases", async (req, reply) => {
+  app.post("/supplies/:id/purchases", async (req: FastifyRequest, reply) => {
+    await app.requireAuth(req);
+    requireRole(req, ["admin", "supervisor"]);
+
     const params = req.params as { id?: string };
     const supplyId = params.id;
 
@@ -19,6 +23,11 @@ export async function suppliesPurchasesRoutes(app: FastifyInstance) {
     if (typeof body.totalCost !== "number" || body.totalCost < 0) {
       return reply.code(400).send({ error: "totalCost inválido" });
     }
+
+    req.log.info(
+      { userId: req.auth?.userId, role: req.auth?.role, supplyId },
+      "supplies.purchase request"
+    );
 
     // 1) Traer supply actual
     const { data: supply, error: sErr } = await supabaseAdmin

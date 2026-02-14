@@ -26,6 +26,8 @@ export async function suppliesRoutes(app: FastifyInstance) {
     await app.requireAuth(req);
     requireRole(req, ["admin", "supervisor"]);
 
+    req.log.info({ userId: req.auth?.userId, role: req.auth?.role }, "supplies.create request");
+
     const body = req.body as Partial<{
       name: string;
       unitBase: UnitBase;

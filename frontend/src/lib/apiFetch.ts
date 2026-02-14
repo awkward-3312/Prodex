@@ -11,8 +11,9 @@ export async function apiFetch(input: RequestInfo | URL, init: ApiFetchInit = {}
     const { data, error } = await supabase.auth.getSession();
     const token = data.session?.access_token;
 
-    console.log("[apiFetch] session?", !!data.session, error?.message ?? null);
-    console.log("[apiFetch] token?", token ? `${token.slice(0, 20)}...${token.slice(-10)}` : null);
+    if (process.env.NODE_ENV === "development") {
+      console.log("[apiFetch] session?", !!data.session, error?.message ?? null);
+    }
 
     if (token) headers.set("Authorization", `Bearer ${token}`);
   }

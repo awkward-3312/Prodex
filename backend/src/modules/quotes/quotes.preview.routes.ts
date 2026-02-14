@@ -1,5 +1,6 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { supabaseAdmin } from "../../lib/supabase.js";
+import { requireRole } from "../../plugins/roles.js";
 
 type DesignLevel = "cliente" | "simple" | "medio" | "pro";
 
@@ -17,12 +18,23 @@ type PreviewBody = {
   isvRate?: number;
 };
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function quotesPreviewRoutes(app: FastifyInstance) {
-  app.post("/quotes/preview", async (req, reply) => {
+  app.post("/quotes/preview", async (req: FastifyRequest, reply) => {
     await app.requireAuth(req);
+    requireRole(req, ["admin", "supervisor", "vendedor"]);
     const body = req.body as Partial<PreviewBody>;
 
     if (!body.productId) return reply.code(400).send({ error: "productId requerido" });
+    if (!UUID_RE.test(body.productId)) {
+      return reply.code(400).send({ error: "productId inválido" });
+    }
+
+    req.log.info(
+      { userId: req.auth?.userId, role: req.auth?.role, productId: body.productId },
+      "quotes.preview request"
+    );
 
     const inputs = (body.inputs ?? {}) as Record<string, unknown>;
 
@@ -39,6 +51,16 @@ export async function quotesPreviewRoutes(app: FastifyInstance) {
 
     const applyIsv = Boolean(body.applyIsv);
     const isvRate = Number.isFinite(body.isvRate as number) ? Number(body.isvRate) : 0.15;
+
+    // 0) Validar producto
+    const { data: product, error: pErr } = await supabaseAdmin
+      .from("products")
+      .select("id")
+      .eq("id", body.productId)
+      .maybeSingle();
+
+    if (pErr) return reply.code(500).send({ error: String(pErr) });
+    if (!product) return reply.code(404).send({ error: "Producto no encontrado" });
 
     // 1) Plantilla activa del producto
     const { data: tpl, error: tErr } = await supabaseAdmin

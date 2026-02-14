@@ -8,6 +8,7 @@ export default async function authMeRoutes(app: FastifyInstance) {
       return reply.send({
         userId: req.auth!.userId,
         role: req.auth!.role,
+        fullName: req.auth!.fullName ?? null,
       });
     } catch (e: any) {
       const code = Number(e?.statusCode ?? 401);

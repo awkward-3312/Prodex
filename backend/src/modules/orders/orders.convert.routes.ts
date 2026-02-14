@@ -14,6 +14,11 @@ export async function ordersConvertRoutes(app: FastifyInstance) {
 
     const role = req.auth?.role as Role | undefined;
 
+    req.log.info(
+      { userId: req.auth?.userId, role, quoteId: (req.params as { id?: string })?.id },
+      "quotes.convert request"
+    );
+
     // 🔒 Gate: si es vendedor, pedir credenciales de supervisor
     if (role === "vendedor") {
       const body = (req.body ?? {}) as ConvertBody;

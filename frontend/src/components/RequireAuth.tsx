@@ -41,12 +41,6 @@ export function RequireAuth({
         ? (rolesKey.split("|").filter(Boolean) as Role[])
         : [];
 
-      // si no hay restricción por rol
-      if (allowed.length === 0) {
-        setReady(true);
-        return;
-      }
-
       const API = process.env.NEXT_PUBLIC_API_URL;
       const res = await apiFetch(`${API}/me`);
       const me = await res.json().catch(() => null);
@@ -54,12 +48,21 @@ export function RequireAuth({
       if (!alive) return;
 
       if (!res.ok || !me?.role) {
-        router.replace("/login");
+        if (res.status === 403) {
+          router.replace("/unauthorized");
+        } else {
+          router.replace("/login");
+        }
         setReady(false);
         return;
       }
 
       const role = String(me.role) as Role;
+
+      if (allowed.length === 0) {
+        setReady(true);
+        return;
+      }
 
       if (!allowed.includes(role)) {
         router.replace("/unauthorized"); // o /login si no tienes esa ruta
@@ -75,6 +78,11 @@ export function RequireAuth({
     };
   }, [router, pathname, rolesKey]);
 
-  if (!ready) return <div className="p-8">Cargando...</div>;
+  if (!ready)
+    return (
+      <div className="min-h-screen bg-[#0F172A] text-[#E2E8F0] flex items-center justify-center">
+        <div className="text-sm text-[#94A3B8]">Cargando...</div>
+      </div>
+    );
   return <>{children}</>;
 }

@@ -9,6 +9,7 @@ declare module "fastify" {
       userId: string;
       jwt: string;
       role: "admin" | "supervisor" | "vendedor";
+      fullName?: string | null;
     };
   }
 
@@ -69,15 +70,29 @@ async function authPlugin(app: FastifyInstance) {
 
     const { data: profile, error } = await supabaseAdmin
       .from("profiles")
-      .select("role")
+      .select("role, full_name")
       .eq("id", sub)
       .single();
 
     if (error || !profile?.role) {
+      app.log.warn(
+        {
+          userId: sub,
+          hasProfile: Boolean(profile),
+          role: profile?.role ?? null,
+          error: error?.message ?? String(error ?? ""),
+        },
+        "Perfil/rol no encontrado"
+      );
       throw Object.assign(new Error("Perfil/rol no encontrado"), { statusCode: 403 });
     }
 
-    req.auth = { userId: sub, jwt: token, role: profile.role };
+    req.auth = {
+      userId: sub,
+      jwt: token,
+      role: profile.role,
+      fullName: (profile as { full_name?: string | null }).full_name ?? null,
+    };
   });
 }
 
