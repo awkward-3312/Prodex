@@ -10,6 +10,7 @@ type Crumb = { label: string; href?: string };
 const navItems: NavItem[] = [
   { label: "Inicio", href: "/" },
   { label: "Cotizar", href: "/quote-preview" },
+  { label: "Cotizaciones", href: "/quotes" },
   { label: "Insumos", href: "/supplies" },
 ];
 
@@ -33,8 +34,12 @@ export function AppShell({
       <header className="border-b border-[#334155] bg-[#0F172A]/80 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-4">
           <div className="flex items-center gap-3">
-            <div className="h-10 w-10 rounded-xl border border-[#334155] bg-[#1E293B] flex items-center justify-center text-xs font-bold text-[#38BDF8]">
-              PX
+            <div className="h-10 w-10 rounded-xl border border-[#334155] bg-[#1E293B] flex items-center justify-center">
+              <img
+                src="/prodex-logo.png"
+                alt="Prodex"
+                className="h-7 w-7 object-contain"
+              />
             </div>
             <div className="flex flex-col leading-tight">
               <span className="text-xs uppercase tracking-[0.3em] text-[#94A3B8]">PRODEX</span>

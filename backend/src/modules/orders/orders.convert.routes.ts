@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { supabaseAdmin } from "../../lib/supabase.js";
+import { createAuthClient, supabaseAdmin } from "../../lib/supabase.js";
 
 type Role = "admin" | "supervisor" | "vendedor";
 
@@ -30,11 +30,11 @@ export async function ordersConvertRoutes(app: FastifyInstance) {
       }
 
       // 1) Login supervisor (NO crea sesión persistente; es server)
-      const { data: signData, error: signErr } =
-        await supabaseAdmin.auth.signInWithPassword({
-          email: body.supervisorEmail,
-          password: body.supervisorPassword,
-        });
+      const authClient = createAuthClient();
+      const { data: signData, error: signErr } = await authClient.auth.signInWithPassword({
+        email: body.supervisorEmail,
+        password: body.supervisorPassword,
+      });
 
       if (signErr || !signData.user?.id) {
         return reply.code(401).send({ error: "Credenciales de supervisor inválidas" });

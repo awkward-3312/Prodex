@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { RequireAuth } from "@/components/RequireAuth";
 import { supabase } from "@/lib/supabaseClient";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { apiFetch } from "@/lib/apiFetch";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/Button";
@@ -14,6 +14,15 @@ import { Badge } from "@/components/ui/Badge";
 import { confirmDialog, promptSupervisorCredentials, toast } from "@/lib/alerts";
 
 type DesignLevel = "cliente" | "simple" | "medio" | "pro";
+type DiscountType = "none" | "seasonal" | "delay" | "senior" | "special_case";
+type DiscountSeason =
+  | "navidad"
+  | "dia_mujer"
+  | "dia_padre"
+  | "dia_madre"
+  | "verano"
+  | "black_friday"
+  | "otro";
 
 type PreviewResponse = {
   breakdown: Array<{
@@ -69,12 +78,12 @@ type ProductSuggestion = {
   name?: string | null;
 };
 
-
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export default function QuotePreviewPage() {
   const API = process.env.NEXT_PUBLIC_API_URL!;
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [productId, setProductId] = useState<string>("");
   const [productQuery, setProductQuery] = useState<string>("");
@@ -85,21 +94,34 @@ export default function QuotePreviewPage() {
   const [productStatus, setProductStatus] = useState<"idle" | "checking" | "valid" | "invalid">(
     "idle"
   );
+
   const [cantidad, setCantidad] = useState<number>(1);
   const [design, setDesign] = useState<DesignLevel>("cliente");
   const [applyIsv, setApplyIsv] = useState<boolean>(false);
+  const [priceFinal, setPriceFinal] = useState<number>(0);
+  const [priceFinalMode, setPriceFinalMode] = useState<"auto" | "manual">("auto");
+  const [discountType, setDiscountType] = useState<DiscountType>("none");
+  const [discountSeason, setDiscountSeason] = useState<DiscountSeason>("navidad");
+  const [discountAmount, setDiscountAmount] = useState<number>(0);
+  const [discountReason, setDiscountReason] = useState<string>("");
 
   const [result, setResult] = useState<PreviewResponse | null>(null);
   const [saved, setSaved] = useState<CreateQuoteResponse | null>(null);
+
   const [isPreviewing, setIsPreviewing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isConverting, setIsConverting] = useState(false);
   const [missingItems, setMissingItems] = useState<MissingItem[]>([]);
+
   const blurTimeoutRef = useRef<number | null>(null);
   const productInputRef = useRef<HTMLInputElement>(null);
+  const lastAppliedParamsRef = useRef<string | null>(null);
 
-  // (Opcional) estado para ver /me
-  const [meInfo, setMeInfo] = useState<{ userId: string; role: string; fullName?: string | null } | null>(null);
+  const [meInfo, setMeInfo] = useState<{
+    userId: string;
+    role: string;
+    fullName?: string | null;
+  } | null>(null);
 
   useEffect(() => {
     if (blurTimeoutRef.current) {
@@ -108,6 +130,60 @@ export default function QuotePreviewPage() {
     }
   }, [showSuggestions]);
 
+  useEffect(() => {
+    const key = searchParams.toString();
+    if (!key || key === lastAppliedParamsRef.current) return;
+
+    const pid = searchParams.get("productId");
+    const qtyRaw = searchParams.get("cantidad");
+    const designRaw = searchParams.get("diseno");
+
+    if (pid && UUID_RE.test(pid)) {
+      setProductId(pid);
+      setProductQuery(pid);
+      setSelectedProduct(null);
+      setShowSuggestions(false);
+    }
+
+    if (qtyRaw) {
+      const qty = Number(qtyRaw);
+      if (Number.isFinite(qty) && qty > 0) setCantidad(qty);
+    }
+
+    if (designRaw && ["cliente", "simple", "medio", "pro"].includes(designRaw)) {
+      setDesign(designRaw as DesignLevel);
+    }
+
+    lastAppliedParamsRef.current = key;
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (discountType === "none") {
+      setDiscountAmount(0);
+      setDiscountReason("");
+    }
+    if (discountType !== "seasonal") {
+      setDiscountSeason("navidad");
+    }
+    if (discountType !== "none") {
+      setPriceFinalMode("auto");
+    }
+  }, [discountType]);
+
+  useEffect(() => {
+    if (!result) return;
+    const suggested = Number(result.totals.suggestedPrice ?? 0);
+    if (!Number.isFinite(suggested) || suggested <= 0) return;
+    if (priceFinalMode === "auto") {
+      const pct = discountType === "none" ? 0 : Number(discountAmount) || 0;
+      const pctClamped = Math.min(Math.max(pct, 0), 99.99);
+      const discount = suggested * (pctClamped / 100);
+      const next = Math.max(0, suggested - discount);
+      setPriceFinal(Number(next.toFixed(2)));
+    }
+  }, [result, priceFinalMode, discountType, discountAmount]);
+
+  // --- SUGERENCIAS DE PRODUCTO ---
   useEffect(() => {
     const query = productQuery.trim();
     if (query.length < 2) {
@@ -122,10 +198,9 @@ export default function QuotePreviewPage() {
     const handle = window.setTimeout(() => {
       void (async () => {
         try {
-          const res = await apiFetch(
-            `${API}/products/search?q=${encodeURIComponent(query)}`,
-            { method: "GET" }
-          );
+          const res = await apiFetch(`${API}/products/search?q=${encodeURIComponent(query)}`, {
+            method: "GET",
+          });
 
           const data = (await res.json().catch(() => [])) as unknown;
           if (!active) return;
@@ -157,6 +232,7 @@ export default function QuotePreviewPage() {
     };
   }, [productQuery, API]);
 
+  // --- VALIDACIÓN SIMPLE DEL PRODUCTO (EXISTE O NO) ---
   useEffect(() => {
     if (!productId || !UUID_RE.test(productId)) {
       setProductStatus(productId ? "invalid" : "idle");
@@ -198,7 +274,7 @@ export default function QuotePreviewPage() {
     };
   }, [productId, selectedProduct, API]);
 
-  // ✅ aquí va el /me (NO await suelto)
+  // --- /ME ---
   useEffect(() => {
     let alive = true;
 
@@ -206,7 +282,15 @@ export default function QuotePreviewPage() {
       try {
         const res = await apiFetch(`${API}/me`);
         const raw = await res.text().catch(() => "");
-        const data: unknown = raw ? (() => { try { return JSON.parse(raw); } catch { return raw; } })() : null;
+        const data: unknown = raw
+          ? (() => {
+              try {
+                return JSON.parse(raw);
+              } catch {
+                return raw;
+              }
+            })()
+          : null;
 
         if (!alive) return;
 
@@ -216,7 +300,6 @@ export default function QuotePreviewPage() {
           return;
         }
 
-        // esperado: { userId, role, fullName? }
         if (typeof data === "object" && data !== null && "userId" in data && "role" in data) {
           const d = data as { userId: string; role: string; fullName?: string | null };
           setMeInfo({
@@ -331,8 +414,49 @@ export default function QuotePreviewPage() {
   };
 
   const saveQuote = async () => {
+    if (!result) {
+      toast("error", "Calcula el preview antes de guardar");
+      return;
+    }
+
+    const suggestedPrice = Number(result.totals.suggestedPrice ?? 0);
+    const finalPrice = Number.isFinite(priceFinal) ? priceFinal : suggestedPrice;
+
+    if (!Number.isFinite(finalPrice) || finalPrice <= 0) {
+      toast("error", "Precio final inválido");
+      return;
+    }
+
+    const discountReasonTrimmed = discountReason.trim();
+    const discountRequested = discountType !== "none";
+    if (discountRequested) {
+      if (!Number.isFinite(discountAmount) || discountAmount <= 0 || discountAmount >= 100) {
+        toast("error", "Porcentaje de descuento inválido");
+        return;
+      }
+      if (!discountReasonTrimmed) {
+        toast("error", "Explicación de descuento requerida");
+        return;
+      }
+      if (discountType === "seasonal" && !discountSeason) {
+        toast("error", "Selecciona una temporada");
+        return;
+      }
+      if (discountType === "special_case" && discountReasonTrimmed.length < 8) {
+        toast("error", "Explica el caso especial con más detalle");
+        return;
+      }
+    }
+
     setIsSaving(true);
     try {
+      let supervisorAuth: { supervisorEmail: string; supervisorPassword: string } | undefined;
+      if (meInfo?.role === "vendedor" && finalPrice < suggestedPrice) {
+        const creds = await promptSupervisorCredentials();
+        if (!creds) return;
+        supervisorAuth = creds;
+      }
+
       const res = await apiFetch(`${API}/quotes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -341,6 +465,17 @@ export default function QuotePreviewPage() {
           inputs: { cantidad, diseño: design },
           applyIsv,
           isvRate: 0.15,
+          priceFinal: finalPrice,
+          discount: discountRequested
+            ? {
+                type: discountType === "seasonal" ? "seasonal" : discountType,
+                season: discountType === "seasonal" ? discountSeason : undefined,
+                reason: discountReasonTrimmed,
+                amount: Number(discountAmount),
+              }
+            : undefined,
+          supervisorEmail: supervisorAuth?.supervisorEmail,
+          supervisorPassword: supervisorAuth?.supervisorPassword,
         }),
       });
 
@@ -374,7 +509,6 @@ export default function QuotePreviewPage() {
     setMissingItems([]);
 
     try {
-      // ✅ si es vendedor, pedimos credenciales de supervisor
       let body: { supervisorEmail: string; supervisorPassword: string } | undefined;
 
       if (meInfo?.role === "vendedor") {
@@ -424,6 +558,7 @@ export default function QuotePreviewPage() {
         setSaved((prev) =>
           prev ? { ...prev, quote: { ...prev.quote, status: "converted" } } : prev
         );
+
       }
     } catch (e) {
       console.error(e);
@@ -442,9 +577,7 @@ export default function QuotePreviewPage() {
         confirmText: "Sí, convertir",
         cancelText: "Cancelar",
       });
-      if (ok) {
-        await convertToOrder();
-      }
+      if (ok) await convertToOrder();
     })();
   };
 
@@ -466,6 +599,22 @@ export default function QuotePreviewPage() {
       : saved?.quote.status === "approved"
       ? "info"
       : "neutral";
+
+  const suggestedPrice = Number(result?.totals.suggestedPrice ?? 0);
+  const effectiveIsvRate = Number(result?.totals.isvRate ?? 0.15);
+  const discountPct = discountType === "none" ? 0 : Math.max(0, Number(discountAmount) || 0);
+  const effectiveDiscountAmount = suggestedPrice > 0 ? (suggestedPrice * discountPct) / 100 : 0;
+  const autoPriceWithDiscount = Math.max(0, suggestedPrice - effectiveDiscountAmount);
+  const finalPrice = Number.isFinite(priceFinal) ? priceFinal : suggestedPrice;
+  const subtotalBeforeDiscount = suggestedPrice;
+  const isvAmount = applyIsv ? finalPrice * effectiveIsvRate : 0;
+  const totalWithIsv = finalPrice + isvAmount;
+  const priceBelowSuggested = Boolean(result) && finalPrice < suggestedPrice;
+  const priceAboveAuto =
+    Boolean(result) &&
+    discountType !== "none" &&
+    Number.isFinite(finalPrice) &&
+    finalPrice > autoPriceWithDiscount + 0.01;
 
   return (
     <RequireAuth>
@@ -523,6 +672,7 @@ export default function QuotePreviewPage() {
                         <Badge variant={productStatusVariant}>{productStatusLabel}</Badge>
                       )}
                     </div>
+
                     <div className="relative">
                       <Input
                         ref={productInputRef}
@@ -568,6 +718,7 @@ export default function QuotePreviewPage() {
                         </div>
                       )}
                     </div>
+
                     {selectedProduct && (
                       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[#94A3B8]">
                         <span>
@@ -582,6 +733,7 @@ export default function QuotePreviewPage() {
                         </Button>
                       </div>
                     )}
+
                     {!selectedProduct && productId && (
                       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-[#94A3B8]">
                         <span>Usando ID: {productId}</span>
@@ -629,7 +781,11 @@ export default function QuotePreviewPage() {
                       <label className="text-xs uppercase tracking-[0.25em] text-[#94A3B8]">
                         Diseño
                       </label>
-                      <Select className="w-44" value={design} onChange={(e) => setDesign(e.target.value as DesignLevel)}>
+                      <Select
+                        className="w-44"
+                        value={design}
+                        onChange={(e) => setDesign(e.target.value as DesignLevel)}
+                      >
                         <option value="cliente">Cliente trae</option>
                         <option value="simple">Simple (L300)</option>
                         <option value="medio">Medio (L500)</option>
@@ -658,22 +814,137 @@ export default function QuotePreviewPage() {
                       </div>
                     </div>
                   </div>
+
+                  <div className="mt-8 grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
+                    <div className="rounded-xl border border-[#334155] bg-[#0F172A]/80 p-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <div>
+                          <p className="text-xs uppercase tracking-[0.25em] text-[#94A3B8]">
+                            Precio sugerido
+                          </p>
+                          <p className="mt-1 text-lg font-semibold">
+                            {result ? `L ${suggestedPrice.toFixed(2)}` : "Calcula preview"}
+                          </p>
+                          {discountType !== "none" && result && (
+                            <div className="mt-1 space-y-1 text-xs text-[#94A3B8]">
+                              <div>Precio con descuento (auto): L {autoPriceWithDiscount.toFixed(2)}</div>
+                              {priceAboveAuto && (
+                                <div className="font-semibold text-[#22C55E]">
+                                  Precio final por encima del auto
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        {priceBelowSuggested && (
+                          <span className="rounded-full border border-[#F97316]/50 bg-[#0F172A]/80 px-3 py-1 text-xs font-semibold text-[#F97316]">
+                            Requiere autorización
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="mt-5 grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
+                        <div className="flex-1 min-w-55">
+                          <label className="text-xs uppercase tracking-[0.25em] text-[#94A3B8]">
+                            Precio final
+                          </label>
+                          <Input
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={Number.isFinite(priceFinal) ? priceFinal : 0}
+                            onChange={(e) => {
+                              setPriceFinalMode("manual");
+                              setPriceFinal(Number(e.target.value));
+                            }}
+                            disabled={!result}
+                          />
+                          <p className="mt-2 text-xs text-[#94A3B8]">
+                            El cálculo automático está disponible; puedes ajustar para evitar pérdidas.
+                          </p>
+                        </div>
+
+                        <Button
+                          variant="surface"
+                          size="sm"
+                          onClick={() => {
+                            if (!result) return;
+                            setPriceFinalMode("auto");
+                            setPriceFinal(Number(autoPriceWithDiscount.toFixed(2)));
+                          }}
+                          disabled={!result}
+                        >
+                          Usar auto
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-[#334155] bg-[#0F172A]/80 p-4">
+                      <p className="text-xs uppercase tracking-[0.25em] text-[#94A3B8]">
+                        Descuento
+                      </p>
+
+                      <div className="mt-4 grid gap-4">
+                        <Select
+                          value={discountType}
+                          onChange={(e) => setDiscountType(e.target.value as DiscountType)}
+                        >
+                          <option value="none">Sin descuento</option>
+                          <option value="seasonal">Descuento de temporada</option>
+                          <option value="delay">Por atrasos en pedidos</option>
+                          <option value="senior">Tercera edad</option>
+                          <option value="special_case">Caso especial</option>
+                        </Select>
+
+                        {discountType === "seasonal" && (
+                          <Select
+                            value={discountSeason}
+                            onChange={(e) => setDiscountSeason(e.target.value as DiscountSeason)}
+                          >
+                            <option value="navidad">Navidad</option>
+                            <option value="dia_mujer">Día de la Mujer</option>
+                            <option value="dia_padre">Día del Padre</option>
+                            <option value="dia_madre">Día de la Madre</option>
+                            <option value="verano">Descuentos de verano</option>
+                            <option value="black_friday">Black Friday</option>
+                            <option value="otro">Otro</option>
+                          </Select>
+                        )}
+
+                        {discountType !== "none" && (
+                          <div className="grid gap-3">
+                            <Input
+                              type="number"
+                              min={0}
+                              max={99.99}
+                              step="0.01"
+                              placeholder="Porcentaje de descuento (%)"
+                              value={discountAmount}
+                              onChange={(e) => setDiscountAmount(Number(e.target.value))}
+                            />
+                            <div className="text-xs text-[#94A3B8]">
+                              Descuento estimado: L {effectiveDiscountAmount.toFixed(2)}
+                            </div>
+                            <textarea
+                              className="w-full rounded-xl border border-[#334155] bg-[#0F172A]/80 p-3 text-sm text-[#E2E8F0] shadow-sm transition placeholder:text-[#94A3B8] focus:border-[#38BDF8] focus:outline-none focus:ring-4 focus:ring-[#38BDF8]/20"
+                              rows={3}
+                              placeholder="Explica el motivo del descuento"
+                              value={discountReason}
+                              onChange={(e) => setDiscountReason(e.target.value)}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="mt-6 flex flex-wrap gap-3">
-                  <Button
-                    variant="secondary"
-                    onClick={preview}
-                    disabled={!productId.trim() || isPreviewing}
-                  >
+                  <Button variant="secondary" onClick={preview} disabled={!productId.trim() || isPreviewing}>
                     {isPreviewing ? "Calculando..." : "Calcular preview"}
                   </Button>
 
-                  <Button
-                    variant="primary"
-                    onClick={saveQuote}
-                    disabled={!productId.trim() || isSaving}
-                  >
+                  <Button variant="primary" onClick={saveQuote} disabled={!productId.trim() || isSaving}>
                     {isSaving ? "Guardando..." : "Guardar cotización"}
                   </Button>
 
@@ -715,9 +986,7 @@ export default function QuotePreviewPage() {
                       </div>
                       <div>Subtotal: L {Number(saved.quote.price_final).toFixed(2)}</div>
                       <div>ISV: L {Number(saved.quote.isv_amount).toFixed(2)}</div>
-                      <div className="text-base font-semibold">
-                        Total: L {Number(saved.quote.total).toFixed(2)}
-                      </div>
+                      <div className="text-base font-semibold">Total: L {Number(saved.quote.total).toFixed(2)}</div>
                     </div>
                     <div className="mt-2 text-xs text-[#94A3B8]">Expira: {saved.quote.expires_at}</div>
                   </Card>
@@ -735,6 +1004,7 @@ export default function QuotePreviewPage() {
                     </ul>
                   </Card>
                 )}
+
               </div>
             </section>
 
@@ -771,13 +1041,11 @@ export default function QuotePreviewPage() {
                   <div className="mt-4 rounded-xl border border-[#334155] bg-[#0F172A]/80 p-4">
                     <p className="text-xs text-[#94A3B8]">Total estimado</p>
                     <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
-                      <div className="text-2xl font-semibold">
-                        L {result.totals.total.toFixed(4)}
-                      </div>
+                      <div className="text-2xl font-semibold">L {totalWithIsv.toFixed(4)}</div>
                       <Button
                         variant="secondary"
                         size="sm"
-                        onClick={() => handleCopy("Total", result.totals.total.toFixed(4))}
+                        onClick={() => handleCopy("Total", totalWithIsv.toFixed(4))}
                       >
                         Copiar total
                       </Button>
@@ -798,18 +1066,17 @@ export default function QuotePreviewPage() {
                     <div>Utilidad: L {result.totals.profit.toFixed(4)}</div>
                     <div>Margen real: {(result.totals.marginReal * 100).toFixed(2)}%</div>
                     <div className="sm:col-span-2 my-2 border-t border-[#334155]" />
-                    <div>ISV: L {result.totals.isv.toFixed(4)}</div>
-                    <div className="text-base font-semibold">
-                      Total: L {result.totals.total.toFixed(4)}
-                    </div>
+                    <div>Subtotal: L {subtotalBeforeDiscount.toFixed(4)}</div>
+                    <div>Descuento ({discountPct.toFixed(2)}%): L {effectiveDiscountAmount.toFixed(4)}</div>
+                    <div>Subtotal con descuento: L {finalPrice.toFixed(4)}</div>
+                    <div>ISV: L {isvAmount.toFixed(4)}</div>
+                    <div className="text-base font-semibold">Total: L {totalWithIsv.toFixed(4)}</div>
                   </div>
                 </Card>
               </section>
             )}
           </div>
         </AppShell>
-
-        
       </>
     </RequireAuth>
   );
